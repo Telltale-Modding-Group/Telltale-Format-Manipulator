@@ -7,3 +7,11 @@ Assembly-CSharp-Editor.csproj
 Assembly-CSharp.csproj
 Assets/TelltaleGames_D3DMesh.ms
 Assets/TelltaleGames_D3DMesh.ms.meta
+/Builds
+/Build
+/AgentScripts
+Assets/skl-reference.meta
+Assets/skl-reference/sk61_louis.skl
+Assets/skl-reference/sk61_louis.skl.meta
+Assets/skl-reference/sk62_clementine402.skl
+Assets/skl-reference/sk62_clementine402.skl.meta

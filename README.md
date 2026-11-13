@@ -10,7 +10,7 @@ It was entirely vide-coded using Claude Opus model.
 
 TelltaleGames_D3DMesh by RandomTBrush was used as reference to study the .skl format.
 
-BoneNames.HashDB file was taken from TelltaleGames_D3DMesh.
+BoneNames.HashDB file was taken from TelltaleGames_D3DMesh (renamed BoneNames.HashDB.bytes).
 
 Everything else here is made by Claude. 
 
