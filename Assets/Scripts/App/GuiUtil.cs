@@ -161,6 +161,31 @@ namespace TFM.App
 
             _tag = new GUIStyle(GUI.skin.label) { fontStyle = FontStyle.Italic, alignment = TextAnchor.MiddleLeft };
             _tag.normal.textColor = new Color(1f, 0.7f, 0.35f);
+
+            // The default skin's window texture is semi-transparent; popups use a solid one.
+            _windowTex = SolidTex(new Color(0.19f, 0.19f, 0.21f, 1f));
+            _backdropTex = SolidTex(new Color(0f, 0f, 0f, 0.55f));
+            _window = new GUIStyle(GUI.skin.window);
+            _window.normal.background = _windowTex;
+            _window.onNormal.background = _windowTex;
+            _window.focused.background = _windowTex;
+            _window.onFocused.background = _windowTex;
+            _window.normal.textColor = Color.white;
+            _window.onNormal.textColor = Color.white;
+            _window.fontStyle = FontStyle.Bold;
+        }
+
+        static Texture2D _windowTex, _backdropTex;
+        static GUIStyle _window;
+
+        /// <summary>Fully opaque window style for modal popups.</summary>
+        public static GUIStyle OpaqueWindow { get { Init(); return _window; } }
+
+        /// <summary>Dims everything behind a modal popup. Call right before GUI.ModalWindow.</summary>
+        public static void DrawModalBackdrop(Rect screen)
+        {
+            Init();
+            if (Event.current.type == EventType.Repaint) GUI.DrawTexture(screen, _backdropTex);
         }
 
         static Font TryMonoFont()

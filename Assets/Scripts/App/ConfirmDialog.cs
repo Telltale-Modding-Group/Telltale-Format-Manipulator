@@ -27,10 +27,11 @@ namespace TFM.App
         public void OnGUI(Rect screen)
         {
             if (!IsOpen) return;
-            float w = Mathf.Min(460f, screen.width - 40f);
-            float h = 170f;
+            float w = Mathf.Min(GuiUtil.S(460f), screen.width - 40f);
+            float h = Mathf.Min(GuiUtil.S(170f), screen.height - 40f);
             var rect = new Rect(screen.x + (screen.width - w) * 0.5f, screen.y + (screen.height - h) * 0.5f, w, h);
-            GUI.ModalWindow(WindowId, rect, Draw, _title);
+            GuiUtil.DrawModalBackdrop(screen);
+            GUI.ModalWindow(WindowId, rect, Draw, _title, GuiUtil.OpaqueWindow);
         }
 
         void Draw(int id)
