@@ -91,6 +91,7 @@ namespace TFM.App
         {
             // To support another format, write an IFormatModule and add it here.
             _modules.Add(new BonesModule());
+            _modules.Add(new PropsModule());
 
             for (int i = 0; i < _modules.Count; i++) _modules[i].Initialize(_ctx);
         }

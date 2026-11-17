@@ -12,7 +12,7 @@ namespace TFM.App
     /// </summary>
     public class BonesModule : IFormatModule
     {
-        public string Title { get { return "Bones (.skl)"; } }
+        public string Title { get { return "Bones"; } }
 
         enum Tab { Bones, Port, Scan, Info }
 
@@ -107,7 +107,7 @@ namespace TFM.App
             if (_file == null)
             {
                 GuiUtil.Space(10);
-                GUILayout.Label("No file loaded. Use [Open .skl] to load a skeleton.", GuiUtil.Note);
+                GUILayout.Label("No file loaded. Use [Open (.skl or other)] to load a skeleton or scan another file for bone data.", GuiUtil.Note);
                 GUILayout.EndArea();
                 DrawPopups();
                 return;
@@ -137,7 +137,7 @@ namespace TFM.App
         void DrawToolbar()
         {
             GUILayout.BeginHorizontal();
-            if (GUILayout.Button("Open .skl...", GuiUtil.W(110))) BrowseOpen();
+            if (GUILayout.Button("Open (.skl or other)", GuiUtil.W(140))) BrowseOpen();
             if (GUILayout.Button("Reload", GuiUtil.W(70))) Reload();
             GUI.enabled = _file != null && _dirty;
             if (GUILayout.Button("Save", GuiUtil.W(70))) Save();

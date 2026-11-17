@@ -12,6 +12,7 @@ namespace TFM.App
     public static class NativeFileDialog
     {
         public const string SklFilter = "Telltale skeleton (*.skl)\0*.skl\0All files (*.*)\0*.*\0";
+        public const string PropFilter = "Telltale property (*.prop)\0*.prop\0All files (*.*)\0*.*\0";
         public const string AnyFilter = "All files (*.*)\0*.*\0";
         public const string TextFilter = "Text file (*.txt)\0*.txt\0All files (*.*)\0*.*\0";
 
