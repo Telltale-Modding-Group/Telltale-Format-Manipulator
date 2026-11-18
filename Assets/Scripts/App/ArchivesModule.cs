@@ -44,7 +44,29 @@ namespace TFM.App
         readonly List<string> _keyLabels = new List<string>();
         readonly List<int> _keyIndex = new List<int>();
 
-        static readonly string[] DumpExts = { "txt", "bin" };
+        // ---- folder batch ----
+        // A folder run walks every archive in a folder one at a time, dumping each. It runs on
+        // the main thread across frames rather than inside one Deferred call so the UI keeps
+        // drawing and the stop button stays clickable while it works.
+        sealed class BatchItem
+        {
+            public string Path;
+            public bool Ok;
+            public int Named;
+            public string Detail;
+        }
+
+        readonly List<string> _batchQueue = new List<string>();
+        readonly List<BatchItem> _batchDone = new List<BatchItem>();
+        string _batchFolder = "";
+        string _batchExt = "txt";
+        bool _batchRunning;
+        volatile bool _batchStop;
+        string _batchCurrent = "";
+        Vector2 _batchScroll;
+        int _batchIndex;
+        int _batchTotal;
+        int _batchFailed;
 
         // ================================================================ module
         public void Initialize(AppContext ctx)
@@ -53,7 +75,10 @@ namespace TFM.App
             BuildKeyList();
         }
 
-        public void Update() { }
+        public void Update()
+        {
+            StepBatch();
+        }
 
         // The window is read-only, so there is never anything to save.
         public bool HasUnsavedChanges { get { return false; } }
@@ -91,6 +116,8 @@ namespace TFM.App
             DrawKeySection();
             GuiUtil.Space(4);
             DrawDumpBar();
+            GuiUtil.Space(4);
+            DrawFolderRow();
             GuiUtil.Space(4);
 
             GUILayout.BeginHorizontal();
@@ -307,6 +334,77 @@ namespace TFM.App
             GUILayout.EndHorizontal();
         }
 
+        // ============================================================= folder row
+        /// <summary>
+        /// Batch mode: dump every archive in a folder. The quiet button starts the run with
+        /// the format shown in the toolbar toggle, so batch and single dumps agree.
+        /// </summary>
+        void DrawFolderRow()
+        {
+            GUILayout.BeginVertical(GUI.skin.box);
+
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("Folder", GuiUtil.SubHeader, GuiUtil.W(48));
+
+            GUI.enabled = !_batchRunning;
+            if (GUILayout.Button("Dump whole folder...", GuiUtil.MinW(150))) BrowseBatchFolder();
+
+            GUILayout.Label("as", GuiUtil.W(16));
+            int format = _batchExt == "bin" ? 1 : 0;
+            int newFormat = GUILayout.Toolbar(format, new[] { "Txt", "Binary" }, GuiUtil.W(130));
+            if (newFormat != format) _batchExt = newFormat == 0 ? "txt" : "bin";
+            GUI.enabled = true;
+
+            if (_batchRunning)
+            {
+                if (GUILayout.Button("STOP", GuiUtil.W(90))) StopBatch();
+                GUILayout.Label(_batchIndex + " / " + _batchTotal
+                                + (_batchCurrent.Length > 0 ? "   " + _batchCurrent : ""), GuiUtil.Note);
+            }
+            else
+            {
+                GUILayout.Label("Every .ttarch and .ttarch2 in the folder is read with the key mode above,"
+                                + " and a name file is written next to each archive.", GuiUtil.Note);
+            }
+            GUILayout.EndHorizontal();
+
+            if (_batchDone.Count > 0)
+            {
+                GUILayout.BeginHorizontal();
+                GUILayout.Label(_batchDone.Count + " processed, " + _batchFailed + " failed", GuiUtil.Note,
+                    GuiUtil.W(180));
+                if (!_batchRunning && GUILayout.Button("Clear report", GuiUtil.W(90)))
+                {
+                    _batchDone.Clear();
+                    _batchFailed = 0;
+                    _batchIndex = 0;
+                    _batchTotal = 0;
+                }
+                GUILayout.EndHorizontal();
+
+                float height = Mathf.Min(GuiUtil.S(96f), _batchDone.Count * GuiUtil.RowHeight + GuiUtil.S(4f));
+                _batchScroll = GuiUtil.VirtualList(_batchScroll, height, _batchDone.Count, GuiUtil.RowHeight,
+                    (row, rect) =>
+                    {
+                        BatchItem item = _batchDone[row];
+                        string label = Path.GetFileName(item.Path) + "   " + item.Detail;
+                        bool prev = GUI.enabled;
+                        GUI.enabled = !_batchRunning;
+                        if (GUI.Button(rect, label, item.Ok ? GuiUtil.Row : GuiUtil.SelectedRow))
+                            SelectBatchItem(item);
+                        GUI.enabled = prev;
+                    });
+            }
+
+            GUILayout.EndVertical();
+        }
+
+        void SelectBatchItem(BatchItem item)
+        {
+            _path = item.Path;
+            _ctx.RunDeferred(() => LoadFile(item.Path));
+        }
+
         // =============================================================== results
         void DrawResults()
         {
@@ -374,7 +472,7 @@ namespace TFM.App
             if (_result.Key != null)
             {
                 sb.AppendLine("Opened with key " + _result.Key.Id);
-                sb.AppendLine("  game: " + _result.Key.Games);
+                sb.AppendLine("  game: " + TtArchiveKeys.NamesSharing(_result.Key));
             }
             else if (_result.Encrypted)
             {
@@ -495,7 +593,7 @@ namespace TFM.App
             }
 
             string msg = result.DeclaredCount + " files, " + _uniqueNames + " unique names";
-            if (result.Key != null) msg += ", opened with " + result.Key.Games;
+            if (result.Key != null) msg += ", opened with " + TtArchiveKeys.NamesSharing(result.Key);
             else if (!result.Encrypted) msg += ", not encrypted";
             SetStatus(msg, false);
         }
@@ -547,6 +645,185 @@ namespace TFM.App
                 : "Name list, text (*.txt)\0*.txt\0All files (*.*)\0*.*\0";
         }
 
+        // ============================================================ folder batch
+
+        /// <summary>
+        /// Finds the archives in a folder and queues them. Nothing is read yet: the queue is
+        /// drained one archive per frame by <see cref="StepBatch"/>.
+        /// </summary>
+        void StartBatch(string folder, string ext)
+        {
+            if (!Directory.Exists(folder))
+            {
+                SetStatus("No such folder: " + folder, true);
+                return;
+            }
+
+            TtArchiveKey key = null;
+            if (!_auto)
+            {
+                key = CurrentManualKey();
+                if (key == null)
+                {
+                    SetStatus("Manual key mode is on but no key is selected. Pick one, or switch to Automatic.", true);
+                    return;
+                }
+            }
+
+            string[] files;
+            try
+            {
+                files = Directory.GetFiles(folder);
+            }
+            catch (Exception e)
+            {
+                SetStatus("Could not list the folder: " + e.Message, true);
+                return;
+            }
+
+            _batchQueue.Clear();
+            for (int i = 0; i < files.Length; i++)
+            {
+                if (IsArchiveName(files[i])) _batchQueue.Add(files[i]);
+            }
+            _batchQueue.Sort(StringComparer.OrdinalIgnoreCase);
+
+            if (_batchQueue.Count == 0)
+            {
+                SetStatus("No .ttarch or .ttarch2 files in " + folder + ".", true);
+                return;
+            }
+
+            _batchFolder = folder;
+            _batchExt = ext;
+            _batchDone.Clear();
+            _batchIndex = 0;
+            _batchTotal = _batchQueue.Count;
+            _batchFailed = 0;
+            _batchCurrent = "";
+            _batchScroll = Vector2.zero;
+            _batchStop = false;
+            _batchRunning = true;
+            _result = null;
+            _uniqueNames = 0;
+            _selected = -1;
+
+            SetStatus("Dumping " + _batchTotal + " archives to ." + ext + " ...", false);
+        }
+
+        static bool IsArchiveName(string path)
+        {
+            string ext = Path.GetExtension(path);
+            return string.Equals(ext, ".ttarch", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(ext, ".ttarch2", StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>Processes one archive per call so the window stays responsive.</summary>
+        void StepBatch()
+        {
+            if (!_batchRunning) return;
+
+            if (_batchStop)
+            {
+                EndBatch("Stopped");
+                return;
+            }
+
+            if (_batchIndex >= _batchQueue.Count)
+            {
+                EndBatch(null);
+                return;
+            }
+
+            string path = _batchQueue[_batchIndex];
+            _batchCurrent = Path.GetFileName(path);
+
+            BatchItem item = new BatchItem();
+            item.Path = path;
+            try
+            {
+                TtArchiveKey key = _auto ? null : CurrentManualKey();
+                TtArchiveResult result = TtArchiveReader.Load(path, key, _auto);
+                item.Ok = result.Ok && result.UniqueCount > 0;
+
+                if (!result.Ok)
+                {
+                    item.Detail = result.Error;
+                }
+                else if (result.UniqueCount == 0)
+                {
+                    item.Detail = "no names recovered";
+                }
+                else
+                {
+                    List<NamePair> names = CollectUnique(result);
+                    string target = Path.Combine(_batchFolder,
+                        Path.GetFileName(path) + "_names." + _batchExt);
+                    if (_batchExt == "bin") WriteBinary(target, names);
+                    else WriteText(target, names);
+
+                    item.Named = names.Count;
+                    item.Detail = names.Count + " names";
+                }
+            }
+            catch (Exception e)
+            {
+                item.Ok = false;
+                item.Detail = e.Message;
+            }
+
+            if (!item.Ok) _batchFailed++;
+            _batchDone.Add(item);
+
+            _batchIndex++;
+            _batchCurrent = "";
+            // Update the counter every frame; the progress line reads this.
+            _ctx.SetStatus("Dumping " + _batchIndex + " / " + _batchTotal + " archives...", false);
+        }
+
+        void EndBatch(string stopped)
+        {
+            _batchRunning = false;
+            _batchCurrent = "";
+
+            int written = _batchDone.Count - _batchFailed;
+            string msg = stopped == null ? "Finished: " : stopped + ": ";
+            msg += written + " of " + _batchDone.Count + " archives dumped";
+            if (_batchFailed > 0) msg += ", " + _batchFailed + " failed";
+            if (stopped == null && _batchQueue.Count - _batchDone.Count > 0)
+                msg += " (" + (_batchQueue.Count - _batchDone.Count) + " not processed)";
+            msg += ".";
+            SetStatus(msg, _batchFailed > 0);
+        }
+        void StopBatch()
+        {
+            if (!_batchRunning) return;
+            _batchStop = true;
+        }
+
+        void BrowseBatchFolder()
+        {
+            if (!NativeFileDialog.IsSupported)
+            {
+                SetStatus("The native folder dialog is only available in Windows builds.", true);
+                return;
+            }
+            _ctx.RunDeferred(() =>
+            {
+                string folder = NativeFileDialog.OpenFolder("Choose a folder of archives", _batchFolder);
+                if (!string.IsNullOrEmpty(folder)) StartBatch(folder, _batchExt);
+            });
+        }
+
+        TtArchiveKey CurrentManualKey()
+        {
+            if (_customKey)
+                return _customKeyBytes != null
+                    ? new TtArchiveKey("custom", "custom key", _customKeyBytes)
+                    : null;
+            return _manualKey;
+        }
+
         struct NamePair
         {
             public ulong Hash;
@@ -554,12 +831,14 @@ namespace TFM.App
         }
 
         /// <summary>Distinct names by hash, sorted by name so the output diffs cleanly.</summary>
-        List<NamePair> CollectUnique()
+        List<NamePair> CollectUnique() { return CollectUnique(_result); }
+
+        static List<NamePair> CollectUnique(TtArchiveResult result)
         {
             Dictionary<ulong, string> byHash = new Dictionary<ulong, string>();
-            for (int i = 0; i < _result.Entries.Count; i++)
+            for (int i = 0; i < result.Entries.Count; i++)
             {
-                TtArchiveEntry entry = _result.Entries[i];
+                TtArchiveEntry entry = result.Entries[i];
                 if (entry.Name.Length == 0) continue;
                 if (!byHash.ContainsKey(entry.Hash)) byHash[entry.Hash] = entry.Name;
             }

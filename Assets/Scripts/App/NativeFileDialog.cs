@@ -47,6 +47,51 @@ namespace TFM.App
 #endif
         }
 
+        /// <summary>
+        /// Picks a folder. Uses the shell's own folder browser, which unlike the comdlg32
+        /// dialogs above has no equivalent on very old Windows, so it is guarded and may
+        /// return null on those systems.
+        /// </summary>
+        public static string OpenFolder(string title, string initialDir)
+        {
+#if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
+            try
+            {
+                if (!string.IsNullOrEmpty(initialDir) && !Directory.Exists(initialDir)) initialDir = null;
+                // Modern shell folder picker: an ordinary COM object, no Vista-only APIs.
+                Type dialogType = Type.GetTypeFromProgID("Shell.Application");
+                if (dialogType == null) return null;
+                object shell = Activator.CreateInstance(dialogType);
+                try
+                {
+                    // Flags 0x1 = only return file-system folders, so the user cannot pick
+                    // a virtual shell folder that has no path.
+                    const int ReturnOnlyFileSystem = 0x1;
+                    object folder = dialogType.InvokeMember("BrowseForFolder",
+                        System.Reflection.BindingFlags.InvokeMethod, null, shell,
+                        new object[] { 0, title ?? "Choose a folder", ReturnOnlyFileSystem, initialDir });
+                    if (folder == null) return null; // cancelled
+
+                    object self = folder.GetType().InvokeMember("Self",
+                        System.Reflection.BindingFlags.GetProperty, null, folder, null);
+                    string path = (string)self.GetType().InvokeMember("Path",
+                        System.Reflection.BindingFlags.GetProperty, null, self, null);
+                    return string.IsNullOrEmpty(path) ? null : path;
+                }
+                finally
+                {
+                    Marshal.ReleaseComObject(shell);
+                }
+            }
+            catch
+            {
+                return null;
+            }
+#else
+            return null;
+#endif
+        }
+
 #if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
         const int OFN_OVERWRITEPROMPT = 0x00000002;
         const int OFN_HIDEREADONLY = 0x00000004;

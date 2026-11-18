@@ -164,7 +164,7 @@ namespace TFM.Core
                             return result;
                         }
                         candidates.Add(manualKey);
-                        result.Log.Add("Manual mode: tried only " + manualKey.Id + " (" + manualKey.Games + ").");
+                        result.Log.Add("Manual mode: tried only " + manualKey.Game + ".");
                     }
 
                     TtArchiveResult best = null;
@@ -887,10 +887,13 @@ namespace TFM.Core
 
             long _cachedIndex = -1;
             byte[] _cached;
+            TtBlowfish _cipher;
+            bool _cipherReady;
 
             public void Dispose()
             {
                 _cached = null;
+                _cipher = null;
             }
 
             /// <summary>Reads count bytes at a payload offset, or returns null if out of range.</summary>
@@ -954,7 +957,16 @@ namespace TFM.Core
                 ReadExact(Source, raw, 0, raw.Length);
 
                 if (Key != null)
-                    new TtBlowfish(Key, Modified).Decipher(raw, 0, raw.Length);
+                {
+                    // Expanding a key schedule is the expensive part of Blowfish, so it is done
+                    // once per archive rather than once per page.
+                    if (!_cipherReady)
+                    {
+                        _cipher = new TtBlowfish(Key, Modified);
+                        _cipherReady = true;
+                    }
+                    _cipher.Decipher(raw, 0, raw.Length);
+                }
 
                 byte[] decoded = null;
                 if (raw.Length == WindowSize) decoded = raw;
