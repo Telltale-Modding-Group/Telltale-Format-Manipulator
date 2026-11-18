@@ -90,6 +90,7 @@ namespace TFM.App
         void RegisterModules()
         {
             // To support another format, write an IFormatModule and add it here.
+            _modules.Add(new ArchivesModule());
             _modules.Add(new BonesModule());
             _modules.Add(new PropsModule());
 
