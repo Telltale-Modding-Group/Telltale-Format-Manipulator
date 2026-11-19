@@ -114,7 +114,6 @@ namespace TFM.Core
         const uint MagicTta4 = 0x54544134; // "TTA4"
 
         const int NamePageSize = 0x10000;
-        const uint MaxNameStream = 0x10000000; // 256 MiB of names is far beyond any real archive
         const int MaxName = 256;
         const int MaxHeaderBlock = 64 * 1024 * 1024;
         const int MaxFiles = 4000000;
@@ -657,7 +656,7 @@ namespace TFM.Core
             p += 8;
 
             if (fileCount < 0 || fileCount > MaxFiles) { why = "file count " + fileCount + " is implausible."; return false; }
-            if (nameBytes > MaxNameStream) { why = "name stream size " + nameBytes + " bytes is implausible."; return false; }
+            if (nameBytes > payload.Length) { why = "name stream size " + nameBytes + " bytes is larger than the archive contents."; return false; }
 
             long tableSize = (long)fileCount * entrySize;
             if (p + tableSize > payload.Length) { why = "the file table is larger than the payload."; return false; }

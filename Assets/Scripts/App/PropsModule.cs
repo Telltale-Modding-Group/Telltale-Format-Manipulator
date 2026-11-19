@@ -47,6 +47,28 @@ namespace TFM.App
             if (_ctx != null) _ctx.SetStatus(msg, error);
         }
 
+        // ---------------------------------------------------------------- name lookup
+
+        /// <summary>Engine type name when the type database knows the hash, else the hex hash.</summary>
+        string TypeLabel(ulong hash)
+        {
+            string n = _ctx != null ? _ctx.PropNames.Type(hash) : null;
+            return n ?? "0x" + hash.ToString("X16");
+        }
+
+        /// <summary>Property key name when the key database knows the hash, else the hex hash.</summary>
+        string KeyLabel(ulong hash)
+        {
+            string n = _ctx != null ? _ctx.PropNames.Key(hash) : null;
+            return n != null ? n + "  (0x" + hash.ToString("X16") + ")" : "0x" + hash.ToString("X16");
+        }
+
+        /// <summary>The file an 8-byte reference points at, if the archive name dumps contain it.</summary>
+        string FileLabel(ulong hash)
+        {
+            return _ctx != null ? _ctx.PropNames.FileRef(hash) : null;
+        }
+
         // ================================================================ module
         public void Initialize(AppContext ctx)
         {
@@ -256,7 +278,7 @@ namespace TFM.App
             _listScroll = GuiUtil.VirtualList(_listScroll, listH, _file.Fields.Count, GuiUtil.RowHeight, (row, r) =>
             {
                 PropField f = _file.Fields[row];
-                string label = row + "  " + f.TypeName + "  (" + f.Elements.Count + ")";
+                string label = row + "  " + TypeLabel(f.TypeHash) + "  (" + f.Elements.Count + ")";
                 if (GUI.Button(r, label, row == _selected ? GuiUtil.SelectedRow : GuiUtil.Row))
                 {
                     _selected = row;
@@ -286,7 +308,8 @@ namespace TFM.App
         void DrawFieldInspector(PropField field)
         {
             GUILayout.Label("Property", GuiUtil.SubHeader);
-            GUILayout.Label("Type: " + field.TypeName, GuiUtil.Note);
+            string typeName = TypeLabel(field.TypeHash);
+            GUILayout.Label("Type: " + typeName, GuiUtil.Note);
             GUILayout.Label("Type hash: 0x" + field.TypeHash.ToString("X16"), GuiUtil.Note);
             GUILayout.Label("Values: " + field.Elements.Count + "   |   " + field.ByteLength + " bytes", GuiUtil.Note);
             GuiUtil.Space(6);
@@ -294,7 +317,8 @@ namespace TFM.App
             for (int i = 0; i < field.Elements.Count; i++)
             {
                 GUILayout.BeginVertical(GUI.skin.box);
-                GUILayout.Label("value " + i + "   key 0x" + field.Elements[i].KeyHash.ToString("X16"), GuiUtil.Note);
+                string keyName = KeyLabel(field.Elements[i].KeyHash);
+                GUILayout.Label("value " + i + "   key " + keyName, GuiUtil.Note);
                 bool changed = DrawElementEditor(field, field.Elements[i], i);
                 if (changed) _dirty = true;
                 GUILayout.EndVertical();
@@ -422,11 +446,42 @@ namespace TFM.App
                         return false;
                     }
 
+                case PropKind.Symbol:
+                    {
+                        ulong h = el.Value.Length >= 8 ? PropFile.ReadU64(el.Value, 0) : 0UL;
+                        string file = FileLabel(h);
+                        GUILayout.Label(file != null ? file : "(no name for this reference)", GuiUtil.Note);
+                        if (file != null)
+                            GUILayout.Label("hash 0x" + h.ToString("X16"), GuiUtil.Note);
+                        return false;
+                    }
+
                 default:
                     {
+                        DrawFileReferences(el.Value);
                         GUILayout.Label(HexDump(el.Value), GuiUtil.Mono);
                         return false;
                     }
+            }
+        }
+
+        /// <summary>
+        /// Lists the file references inside an undecoded value: every 8-byte slot that matches a
+        /// name from the archive dumps. Layout is unknown, so each slot is checked on its own.
+        /// </summary>
+        void DrawFileReferences(byte[] value)
+        {
+            int shown = 0;
+            for (int o = 0; o + 8 <= value.Length && shown < 32; o++)
+            {
+                ulong h = PropFile.ReadU64(value, o);
+                if (h == 0) continue;
+                string file = FileLabel(h);
+                if (file == null) continue;
+                if (shown == 0) GUILayout.Label("References found inside this value:", GuiUtil.SubHeader);
+                GUILayout.Label("  +" + o + "   " + file, GuiUtil.Note);
+                shown++;
+                o += 7; // the reference is 8 bytes wide; skip past it
             }
         }
 
@@ -649,16 +704,15 @@ namespace TFM.App
             for (int i = 0; i < _file.HeaderTable.Count; i++)
             {
                 ulong h = _file.HeaderTable[i];
-                string nm;
+                string nm = TypeLabel(h);
                 switch (h)
                 {
-                    case PropTypeNames.TypeBool: nm = "bool"; break;
-                    case PropTypeNames.TypeFloat: nm = "float"; break;
-                    case PropTypeNames.TypeString: nm = "string"; break;
-                    case PropTypeNames.TypeColor: nm = "color"; break;
-                    case PropTypeNames.TypeBounds: nm = "vec3"; break;
-                    case PropTypeNames.TypeSymbol: nm = "symbol"; break;
-                    default: nm = "(unresolved)"; break;
+                    case PropTypeNames.TypeBool: nm += "  (struct: 1 byte)"; break;
+                    case PropTypeNames.TypeFloat: nm += "  (struct: 4 bytes)"; break;
+                    case PropTypeNames.TypeString: nm += "  (length-prefixed)"; break;
+                    case PropTypeNames.TypeColor: nm += "  (struct: 16 bytes)"; break;
+                    case PropTypeNames.TypeBounds: nm += "  (struct: 12 bytes)"; break;
+                    case PropTypeNames.TypeSymbol: nm += "  (struct: 8 bytes)"; break;
                 }
                 sb.AppendLine("  " + i + "  0x" + h.ToString("X16") + "  " + nm);
             }

@@ -14,6 +14,8 @@ TelltaleToolKit by iMrShadow (https://github.com/iMrShadow/TelltaleToolKit) was 
 
 BoneNames.HashDB file was taken from TelltaleGames_D3DMesh (renamed BoneNames.HashDB.bytes).
 
+PropertySet-Keys.txt and global.vdb.json from TelltaleToolKit were used to create lists of names.
+
 Everything else here is made by Claude. 
 
 
