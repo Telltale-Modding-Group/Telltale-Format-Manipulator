@@ -85,7 +85,11 @@ public static class PlayModeRunner
     {
         try
         {
-            AppMain[] apps = UnityEngine.Object.FindObjectsByType<AppMain>(FindObjectsInactive.Include);
+            // Both arguments are given explicitly: Unity 2023.1 has no single-argument
+            // FindObjectsByType overload taking FindObjectsInactive, only the two-parameter
+            // form. Passing both keeps this compiling on 2023.1 and on 6000.x alike.
+            AppMain[] apps = UnityEngine.Object.FindObjectsByType<AppMain>(
+                FindObjectsInactive.Include, FindObjectsSortMode.None);
             Log.AppendLine("AppMain instances: " + apps.Length);
             if (apps.Length == 0) { Errors.Add("No AppMain found in the active scene."); return; }
 
