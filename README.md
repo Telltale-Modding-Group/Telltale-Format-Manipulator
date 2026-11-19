@@ -23,3 +23,21 @@ BoneNames.HashDB file was taken from TelltaleGames_D3DMesh (renamed BoneNames.Ha
 PropertySet-Keys.txt and global.vdb.json from TelltaleToolKit were used to create lists of names.
 
 Everything else here is made by Claude.
+
+
+
+> Compare the sk63_omar_bodyUpper_m / _wet_m and sk63_omar_bodyLower_m / _wet_m files quickly, tell me if they are of any use
+
+I'll compare the two pairs byte by byte.
+
+  Ran 1 shell command
+
+The two pairs are not near-identical: about 7,800 of 10,600 bytes differ, and the sizes don't match either. I'll check whether that's a real content difference or just an offset shift.
+
+  Ran 1 shell command
+
+The headers differ, but partly because of the byte at offset 4, which is the file length field. I'll compare only the parts that are layout, ignoring length and CRC.
+
+  Thought for 18s, ran 1 shell command
+
+The upper pair shares an identical type table and differs in its parent prop. That makes it the more promising pair, so I'll compare its payloads field by field.

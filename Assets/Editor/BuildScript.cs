@@ -45,18 +45,39 @@ public static class BuildScript
             return;
         }
 
-        CopyNameDumps(Path.Combine(outDir, ExeName));
-
         if (Application.isBatchMode) EditorApplication.Exit(0);
     }
 
+    [MenuItem("Tools/Telltale Format Manipulator/Open Build Folder")]
+    public static void OpenBuildFolder()
+    {
+        string root = Directory.GetParent(Application.dataPath).FullName;
+        string outDir = Path.Combine(root, OutputDir);
+        if (Directory.Exists(outDir)) EditorUtility.RevealInFinder(outDir);
+    }
+
     // The archive name dumps are read from disk at runtime, so they have to sit next to the
-    // player. A player only ships StreamingAssets as loose files, so they are copied into the
-    // built <exe>_Data/StreamingAssets/Names after the build.
+    // player. A player only ships StreamingAssets as loose files, and the dumps intentionally do
+    // not live there in the project, so every build - from this menu or File > Build - copies
+    // them into <exe>_Data/StreamingAssets/Names.
     const string NameDumpSource = "Assets/Resources/Names";
+
+    [UnityEngine.Scripting.Preserve]
+    class CopyNameDumpsStep : UnityEditor.Build.IPostprocessBuildWithReport
+    {
+        public int callbackOrder { get { return 0; } }
+
+        public void OnPostprocessBuild(BuildReport report)
+        {
+            if (report.summary.result != BuildResult.Succeeded) return;
+            CopyNameDumps(report.summary.outputPath);
+        }
+    }
 
     static void CopyNameDumps(string exePath)
     {
+        if (string.IsNullOrEmpty(exePath)) return;
+
         string root = Directory.GetParent(Application.dataPath).FullName;
         string src = Path.Combine(root, NameDumpSource);
         if (!Directory.Exists(src))
@@ -79,13 +100,5 @@ public static class BuildScript
             copied++;
         }
         Debug.Log("[Build] Copied " + copied + " name dumps to " + dst);
-    }
-
-    [MenuItem("Tools/Telltale Format Manipulator/Open Build Folder")]
-    public static void OpenBuildFolder()
-    {
-        string root = Directory.GetParent(Application.dataPath).FullName;
-        string outDir = Path.Combine(root, OutputDir);
-        if (Directory.Exists(outDir)) EditorUtility.RevealInFinder(outDir);
     }
 }
