@@ -98,14 +98,20 @@ namespace TFM.Core
     /// </remarks>
     public static class TtArchiveReader
     {
-        const uint MagicTtcN = 0x4E435454; // "TTCN"
-        const uint MagicTtcE = 0x45435454; // "TTCE"
-        const uint MagicTtce = 0x65435454; // "TTCe"
-        const uint MagicTtcZ = 0x5A435454; // "TTCZ"
-        const uint MagicTtcz = 0x7A435454; // "TTCz"
-        const uint MagicTta2 = 0x32545441; // "TTA2"
-        const uint MagicTta3 = 0x33545441; // "TTA3"
-        const uint MagicTta4 = 0x34545441; // "TTA4"
+        // Container magics, read as a little-endian uint32. The four bytes on disk are the
+        // four-character code in reverse order: a TTCE archive begins with the bytes 'E','C',
+        // 'T','T', which read back little-endian give 0x54544345. Verified against a real
+        // TWD: Definitive .ttarch2.
+        const uint MagicTtcN = 0x5454434E; // "TTCN"
+        const uint MagicTtcE = 0x54544345; // "TTCE"
+        const uint MagicTtce = 0x54544365; // "TTCe"
+        const uint MagicTtcZ = 0x5454435A; // "TTCZ"
+        const uint MagicTtcz = 0x5454437A; // "TTCz"
+
+        // Payload magics, same byte order rule: a TTA4 payload begins with '4','A','T','T'.
+        const uint MagicTta2 = 0x54544132; // "TTA2"
+        const uint MagicTta3 = 0x54544133; // "TTA3"
+        const uint MagicTta4 = 0x54544134; // "TTA4"
 
         const int NamePageSize = 0x10000;
         const int MaxName = 256;
@@ -536,20 +542,34 @@ namespace TFM.Core
                     payload.PageSizes = new uint[pages];
                     payload.PageStarts = new ulong[pages];
 
-                    ulong previous = ReadU64(fs);
-                    if (previous != 0) throw new InvalidDataException("the page table does not start at zero.");
+                    // The table holds NumPages+1 cumulative offsets. Real TWD: Definitive
+                    // archives store absolute file positions (the first entry equals the end of
+                    // the header, e.g. 36), while some writers use offsets relative to the start
+                    // of the page data (first entry 0). Both are accepted: a leading 0 means
+                    // relative, anything else is taken as absolute.
+                    ulong[] offsets = new ulong[pages + 1];
+                    for (uint i = 0; i <= pages; i++) offsets[i] = ReadU64(fs);
+
+                    long dataStart = fs.Position;
+                    bool relative = offsets[0] == 0;
+                    ulong bias = relative ? (ulong)dataStart : 0UL;
 
                     for (uint i = 0; i < pages; i++)
                     {
-                        ulong next = ReadU64(fs);
-                        if (next < previous) throw new InvalidDataException("page offsets are not ascending.");
-                        ulong size = next - previous;
+                        if (offsets[i + 1] < offsets[i])
+                            throw new InvalidDataException("page offsets are not ascending.");
+
+                        ulong size = offsets[i + 1] - offsets[i];
                         if (size > window + 4096)
                             throw new InvalidDataException("a packed page is larger than the page size.");
-                        payload.PageStarts[i] = previous;
+
+                        payload.PageStarts[i] = offsets[i] + bias;
                         payload.PageSizes[i] = (uint)size;
-                        previous = next;
                     }
+
+                    ulong lastEnd = offsets[pages] + bias;
+                    if (lastEnd > (ulong)fs.Length)
+                        throw new InvalidDataException("the page table runs past the end of the file.");
 
                     payload.Length = (long)pages * window;
                     payload.Compressed = true;
@@ -952,7 +972,8 @@ namespace TFM.Core
             {
                 if (_cached != null && _cachedIndex == index) return _cached;
 
-                Source.Seek(Start + (long)PageStarts[index], SeekOrigin.Begin);
+                // PageStarts holds absolute file offsets, so no base is added here.
+                Source.Seek((long)PageStarts[index], SeekOrigin.Begin);
                 byte[] raw = new byte[PageSizes[index]];
                 ReadExact(Source, raw, 0, raw.Length);
 
