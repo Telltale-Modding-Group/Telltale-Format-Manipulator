@@ -322,7 +322,7 @@ namespace TFM.App
             }
             else if (named)
             {
-                GUILayout.Label("Writes <archive>_names.txt or <archive>_names.bin next to the archive: "
+                GUILayout.Label("Writes <archive name>_names.txt or <archive name>_names.bin (without .ttarch/.ttarch2) next to the archive: "
                                 + _uniqueNames + " unique names. Both hold the same names; the binary"
                                 + " file is a hash-and-name table meant to be read back by this tool.",
                     GuiUtil.Note);
@@ -609,7 +609,7 @@ namespace TFM.App
             string source = _path;
             _ctx.RunDeferred(() =>
             {
-                string suggested = Path.GetFileName(source) + "_names." + ext;
+                string suggested = Path.GetFileNameWithoutExtension(source) + "_names." + ext;
                 string dir = null;
                 try { dir = Path.GetDirectoryName(source); } catch { }
 
@@ -758,7 +758,7 @@ namespace TFM.App
                 {
                     List<NamePair> names = CollectUnique(result);
                     string target = Path.Combine(_batchFolder,
-                        Path.GetFileName(path) + "_names." + _batchExt);
+                        Path.GetFileNameWithoutExtension(path) + "_names." + _batchExt);
                     if (_batchExt == "bin") WriteBinary(target, names);
                     else WriteText(target, names);
 

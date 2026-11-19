@@ -114,6 +114,7 @@ namespace TFM.Core
         const uint MagicTta4 = 0x54544134; // "TTA4"
 
         const int NamePageSize = 0x10000;
+        const uint MaxNameStream = 0x10000000; // 256 MiB of names is far beyond any real archive
         const int MaxName = 256;
         const int MaxHeaderBlock = 64 * 1024 * 1024;
         const int MaxFiles = 4000000;
@@ -649,12 +650,14 @@ namespace TFM.Core
 
             byte[] counters = payload.Read(p, 8);
             if (counters == null) { why = "the payload counters could not be read."; return false; }
-            int namePages = I32(counters, 0);
+            // Size of the name stream in BYTES (a whole number of 64 KiB pages), not a page
+            // count: real TWD: Definitive archives store 65536 for one page, 131072 for two.
+            uint nameBytes = U32(counters, 0);
             int fileCount = I32(counters, 4);
             p += 8;
 
             if (fileCount < 0 || fileCount > MaxFiles) { why = "file count " + fileCount + " is implausible."; return false; }
-            if (namePages < 0 || namePages > 0x10000) { why = "name page count " + namePages + " is implausible."; return false; }
+            if (nameBytes > MaxNameStream) { why = "name stream size " + nameBytes + " bytes is implausible."; return false; }
 
             long tableSize = (long)fileCount * entrySize;
             if (p + tableSize > payload.Length) { why = "the file table is larger than the payload."; return false; }
@@ -694,10 +697,10 @@ namespace TFM.Core
 
             long namesStart = p + tableSize;
             long namesEnd = payload.Length;
-            if (namePages > 0)
+            if (nameBytes > 0)
             {
-                long byPages = namesStart + (long)namePages * NamePageSize;
-                if (byPages < namesEnd) namesEnd = byPages;
+                long byStream = namesStart + nameBytes;
+                if (byStream < namesEnd) namesEnd = byStream;
             }
 
             r.DeclaredCount = fileCount;
