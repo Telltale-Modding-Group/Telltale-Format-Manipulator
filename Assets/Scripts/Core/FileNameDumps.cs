@@ -43,6 +43,21 @@ namespace TFM.Core
         }
 
         /// <summary>
+        /// Reads every name dump under the first of <paramref name="folders"/> that exists and
+        /// contains dumps. Files that are not dumps are skipped.
+        /// </summary>
+        public static NameTable LoadFolderAt(string[] folders)
+        {
+            if (folders == null) return NameTable.Empty;
+            for (int i = 0; i < folders.Length; i++)
+            {
+                NameTable t = LoadFolder(folders[i]);
+                if (t.Count > 0) return t;
+            }
+            return NameTable.Empty;
+        }
+
+        /// <summary>
         /// Reads every name dump under <paramref name="folder"/>, recursively. Files that are not
         /// dumps are skipped. Returns a table keyed by the CRC-64 stored in each dump.
         /// </summary>

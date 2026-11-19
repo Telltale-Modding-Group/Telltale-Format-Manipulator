@@ -94,10 +94,23 @@ namespace TFM.App
             // them, and they change whenever more archives are dumped.
             if (!string.IsNullOrEmpty(nameDumpFolder))
             {
-                string folder = Path.Combine(Application.dataPath, nameDumpFolder);
-                NameTable files = FileNameDumps.LoadFolder(folder);
+                NameTable files = FileNameDumps.LoadFolderAt(NameDumpRoots(nameDumpFolder));
                 names.FileNames = files;
+                if (files.Count == 0)
+                    _status = "No archive name dumps found, so file references will show as hashes."
+                              + " Looked in: " + string.Join("; ", NameDumpRoots(nameDumpFolder));
             }
+        }
+
+        /// <summary>
+        /// Candidate folders for the name dumps. In the editor they live under Assets; in a player
+        /// build only StreamingAssets travels with the game, so the build copies them there.
+        /// </summary>
+        static string[] NameDumpRoots(string relative)
+        {
+            string inEditor = Path.Combine(Application.dataPath, relative);
+            string inPlayer = Path.Combine(Application.streamingAssetsPath, Path.GetFileName(relative));
+            return inPlayer == inEditor ? new[] { inEditor } : new[] { inEditor, inPlayer };
         }
 
         void LoadDatabase()
