@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using TFM.Core;
 using UnityEngine;
 
@@ -13,6 +14,16 @@ namespace TFM.App
     {
         [Tooltip("Assets/Data/BoneNames.HashDB.bytes - the bone name / hash lookup table.")]
         public TextAsset boneHashDatabase;
+
+        [Tooltip("Assets/Data/PropsTypeNames.bytes - engine type names for .prop files.")]
+        public TextAsset propTypeNames;
+
+        [Tooltip("Assets/Data/PropsKeyNames.bytes - property key names for .prop files.")]
+        public TextAsset propKeyNames;
+
+        [Tooltip("Folder of archive name dumps (Dump Binary output). Read at startup to resolve "
+                 + "mesh, texture and chore references in .prop files. Relative to the data folder.")]
+        public string nameDumpFolder = "Resources/Names";
 
         [Tooltip("UI scale as a percentage. The dropdown in the top bar changes this at runtime.")]
         public int uiScalePercent = 100;
@@ -49,6 +60,8 @@ namespace TFM.App
                 _statusError = err;
             });
 
+            LoadPropNames();
+
             RegisterModules();
 
             int pref = PlayerPrefs.GetInt(ScalePrefKey, uiScalePercent);
@@ -61,6 +74,25 @@ namespace TFM.App
         void OnDestroy()
         {
             Application.wantsToQuit -= OnWantsToQuit;
+        }
+
+        void LoadPropNames()
+        {
+            PropNameLookup names = _ctx.PropNames;
+
+            if (propTypeNames != null)
+                names.TypeNames = NameTable.Load(propTypeNames.bytes, "TFMTYPES", "type names");
+            if (propKeyNames != null)
+                names.KeyNames = NameTable.Load(propKeyNames.bytes, "TFMKEYNM", "key names");
+
+            // Archive name dumps are read straight off disk at startup: there are hundreds of
+            // them, and they change whenever more archives are dumped.
+            if (!string.IsNullOrEmpty(nameDumpFolder))
+            {
+                string folder = Path.Combine(Application.dataPath, nameDumpFolder);
+                NameTable files = FileNameDumps.LoadFolder(folder);
+                names.FileNames = files;
+            }
         }
 
         void LoadDatabase()

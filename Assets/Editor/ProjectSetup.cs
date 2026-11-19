@@ -91,6 +91,11 @@ public static class ProjectSetup
             Debug.LogError("[ProjectSetup] Hash database not found at " + HashDbPath + " (must be a .bytes TextAsset).");
         app.boneHashDatabase = db;
 
+        app.propTypeNames = AssetDatabase.LoadAssetAtPath<TextAsset>("Assets/Data/PropsTypeNames.bytes");
+        app.propKeyNames = AssetDatabase.LoadAssetAtPath<TextAsset>("Assets/Data/PropsKeyNames.bytes");
+        if (app.propTypeNames == null || app.propKeyNames == null)
+            Debug.LogWarning("[ProjectSetup] Props name databases missing under Assets/Data (PropsTypeNames.bytes, PropsKeyNames.bytes). Prop type and key names will show as hashes.");
+
         EditorSceneManager.MarkSceneDirty(scene);
         EditorSceneManager.SaveScene(scene, ScenePath);
         EditorBuildSettings.scenes = new[] { new EditorBuildSettingsScene(ScenePath, true) };

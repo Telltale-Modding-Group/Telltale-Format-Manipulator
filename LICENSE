@@ -22,5 +22,9 @@ ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
 OTHER DEALINGS IN THE SOFTWARE.
 
 Please note that the BoneNames.HashDB.bytes file is excluded from this license.
+Please note that the PropsKeyNames.bytes file is excluded from this license.
+Please note that the PropsTypeNames.bytes file is excluded from this license.
+
+These files are based on other people's work and have their own licenses.
 
 For more information, please refer to <https://unlicense.org>

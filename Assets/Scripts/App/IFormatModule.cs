@@ -28,10 +28,14 @@ namespace TFM.App
         public AppContext(HashDatabase boneNames, Action<string, bool> status)
         {
             BoneNames = boneNames ?? HashDatabase.Empty;
+            PropNames = new PropNameLookup();
             _status = status;
         }
 
         public HashDatabase BoneNames { get; private set; }
+
+        /// <summary>Type, property-key and file-reference names shown by the props editor.</summary>
+        public PropNameLookup PropNames { get; set; }
 
         /// <summary>Full window rect in GUI coordinates (after UI scaling). Use it to place popups.</summary>
         public Rect ScreenRect { get; set; }
