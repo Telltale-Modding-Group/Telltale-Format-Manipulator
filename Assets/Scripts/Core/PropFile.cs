@@ -910,7 +910,7 @@ namespace TFM.Core
             return (uint)(d[o] | (d[o + 1] << 8) | (d[o + 2] << 16) | (d[o + 3] << 24));
         }
 
-        internal static ulong ReadU64(byte[] d, int o)
+        public static ulong ReadU64(byte[] d, int o)
         {
             return ReadU32(d, o) | ((ulong)ReadU32(d, o + 4) << 32);
         }
@@ -925,5 +925,7 @@ namespace TFM.Core
 
         public static uint ReadUInt(byte[] d, int o) { return ReadU32(d, o); }
         public static void WriteUInt(byte[] d, int o, uint v) { PropField.PutU32(d, o, v); }
+
+        public static void WriteU64(byte[] d, int o, ulong v) { PropField.PutU64(d, o, v); }
     }
 }
