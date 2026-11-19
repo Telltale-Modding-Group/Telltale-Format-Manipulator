@@ -154,6 +154,106 @@ namespace TFM.Core
         }
     }
 
+    /// <summary>How a type's value is laid out in a property payload.</summary>
+    public enum PropLayoutKind
+    {
+        /// <summary>Not known; the property is kept opaque.</summary>
+        Unknown = 0,
+        /// <summary>A u32 byte length followed by the text. The length is not part of the value.</summary>
+        Text = 1,
+        /// <summary>A fixed number of bytes.</summary>
+        Fixed = 2,
+        /// <summary>A u32 element count followed by that many fixed-size elements.</summary>
+        Array = 3,
+        /// <summary>A u32 entry count, then per entry a text key and a size-prefixed value block.</summary>
+        Map = 4,
+        /// <summary>A u32 element count followed by that many length-prefixed texts.</summary>
+        TextArray = 5
+    }
+
+    /// <summary>
+    /// Type layouts, keyed by type hash. The built-in table covers the types the reference set
+    /// identified; Assets/Data/PropsTypeLayouts.bytes extends it with every type measured from
+    /// the game files, so far more properties decode.
+    /// </summary>
+    public static class PropLayouts
+    {
+        public const string Magic = "TFMPROP1";
+
+        struct Layout
+        {
+            public PropLayoutKind Kind;
+            public int ItemSize; // element size for Fixed/Array
+        }
+
+        static readonly Dictionary<ulong, Layout> table = new Dictionary<ulong, Layout>();
+
+        // Built-in fallbacks so a file still parses when the table asset is not assigned.
+        static PropLayouts()
+        {
+            Set(PropTypeNames.TypeString, PropLayoutKind.Text, 0);
+            Set(PropTypeNames.TypeBool, PropLayoutKind.Fixed, 1);
+            Set(PropTypeNames.TypeFloat, PropLayoutKind.Fixed, 4);
+            Set(PropTypeNames.TypeColor, PropLayoutKind.Fixed, 16);
+            Set(PropTypeNames.TypeBounds, PropLayoutKind.Fixed, 12);
+            Set(PropTypeNames.TypeSymbol, PropLayoutKind.Fixed, 8);
+            Set(PropTypeNames.TypeProp8A, PropLayoutKind.Fixed, 8);
+            Set(PropTypeNames.TypeProp8B, PropLayoutKind.Fixed, 8);
+            Set(PropTypeNames.TypeProp8C, PropLayoutKind.Fixed, 8);
+        }
+
+        static void Set(ulong hash, PropLayoutKind kind, int itemSize)
+        {
+            Layout l;
+            l.Kind = kind;
+            l.ItemSize = itemSize;
+            table[hash] = l;
+        }
+
+        /// <summary>
+        /// Loads a measured layout table and adds it to the built-in entries. Layout: magic[8],
+        /// u32 version, u32 count, then per entry u64 typeHash, u8 kind, u32 itemSize, by type hash.
+        /// Records with an unknown kind are skipped.
+        /// </summary>
+        public static int Load(byte[] data)
+        {
+            if (data == null || data.Length < 16) return 0;
+            char[] m = new char[8];
+            for (int i = 0; i < 8; i++) m[i] = (char)data[i];
+            if (new string(m) != Magic) return 0;
+
+            int count = (int)BitConverter.ToUInt32(data, 12);
+            int p = 16, added = 0;
+            for (int i = 0; i < count; i++)
+            {
+                if (p + 13 > data.Length) break;
+                ulong hash = BitConverter.ToUInt64(data, p);
+                PropLayoutKind kind = (PropLayoutKind)data[p + 8];
+                int itemSize = (int)BitConverter.ToUInt32(data, p + 9);
+                p += 13;
+
+                if (kind == PropLayoutKind.Unknown) continue;
+                Set(hash, kind, itemSize);
+                added++;
+            }
+            return added;
+        }
+
+        public static int Count { get { return table.Count; } }
+
+        public static PropLayoutKind KindOf(ulong typeHash)
+        {
+            Layout l;
+            return table.TryGetValue(typeHash, out l) ? l.Kind : PropLayoutKind.Unknown;
+        }
+
+        public static int ItemSizeOf(ulong typeHash)
+        {
+            Layout l;
+            return table.TryGetValue(typeHash, out l) ? l.ItemSize : 0;
+        }
+    }
+
     /// <summary>Type hashes recovered from the reference set, with the layout each one uses.</summary>
     public static class PropTypeNames
     {
@@ -193,7 +293,10 @@ namespace TFM.Core
         public static PropKind KindOf(ulong typeHash)
         {
             PropKind k;
-            return Kinds.TryGetValue(typeHash, out k) ? k : PropKind.Unknown;
+            if (Kinds.TryGetValue(typeHash, out k)) return k;
+            // Anything the layout table places is a fixed-size or counted value; it stays a blob
+            // in the editor, but its extent is known, so the property decodes instead of being opaque.
+            return PropLayouts.KindOf(typeHash) != PropLayoutKind.Unknown ? PropKind.Blob8 : PropKind.Unknown;
         }
 
         public static int FixedSizeOf(ulong typeHash)
@@ -205,7 +308,11 @@ namespace TFM.Core
                 case PropKind.Color: return 16;
                 case PropKind.Vec3: return 12;
                 case PropKind.Symbol: return 8;
-                case PropKind.Blob8: return 8;
+                case PropKind.Blob8:
+                    // Blob8 doubles as "known layout, edited as bytes": the real size comes from
+                    // the measured table, not from the enum name.
+                    return PropLayouts.KindOf(typeHash) == PropLayoutKind.Fixed
+                        ? PropLayouts.ItemSizeOf(typeHash) : 8;
                 default: return -1;
             }
         }
@@ -511,6 +618,8 @@ namespace TFM.Core
             f.TypeHash = type;
             f.Kind = kind;
             int fixedSize = PropTypeNames.FixedSizeOf(type);
+            PropLayoutKind layout = PropLayouts.KindOf(type);
+            int itemSize = PropLayouts.ItemSizeOf(type);
 
             for (int i = 0; i < count; i++)
             {
@@ -527,6 +636,13 @@ namespace TFM.Core
                     if (len > 1 << 20 || p + len > end) { why = "string length " + len + " runs past the payload"; return false; }
                     n = (int)len;
                 }
+                else if (layout == PropLayoutKind.Array || layout == PropLayoutKind.TextArray
+                         || layout == PropLayoutKind.Map)
+                {
+                    int body = ContainerLength(d, p, end, layout, itemSize, out why);
+                    if (body < 0) return false;
+                    n = body;
+                }
                 else
                 {
                     if (fixedSize < 0) { why = "no size for type"; return false; }
@@ -541,6 +657,59 @@ namespace TFM.Core
             field = f;
             next = p;
             return true;
+        }
+
+        /// <summary>
+        /// Measures a counted container value at p: a u32 count, then that many fixed-size items,
+        /// length-prefixed texts, or map entries (text key, then a size-prefixed value block).
+        /// The count word is part of the returned length. Returns -1 when the shape is invalid.
+        /// </summary>
+        static int ContainerLength(byte[] d, int p, int end, PropLayoutKind layout, int itemSize, out string why)
+        {
+            why = null;
+            if (p + 4 > end) { why = "truncated container count"; return -1; }
+
+            uint n = ReadU32(d, p);
+            int start = p;
+            p += 4;
+            if (n > 1 << 20) { why = "implausible container count " + n; return -1; }
+
+            if (layout == PropLayoutKind.Array)
+            {
+                int size = itemSize;
+                if (size <= 0) { why = "array element size is unknown"; return -1; }
+                long span = (long)n * size;
+                if (p + span > end) { why = "array runs past the payload"; return -1; }
+                return (int)(span + 4);
+            }
+
+            if (layout == PropLayoutKind.TextArray)
+            {
+                for (uint i = 0; i < n; i++)
+                {
+                    if (p + 4 > end) { why = "truncated text-array length"; return -1; }
+                    uint len = ReadU32(d, p);
+                    p += 4;
+                    if (len > 1 << 20 || p + len > end) { why = "text array runs past the payload"; return -1; }
+                    p += (int)len;
+                }
+                return p - start;
+            }
+
+            // Map: a text key, then a nested value that is itself a counted sequence.
+            for (uint i = 0; i < n; i++)
+            {
+                if (p + 4 > end) { why = "truncated map key length"; return -1; }
+                uint len = ReadU32(d, p);
+                p += 4;
+                if (len > 1 << 20 || p + len > end) { why = "map key runs past the payload"; return -1; }
+                p += (int)len;
+
+                int inner = ContainerLength(d, p, end, PropLayoutKind.Array, itemSize, out why);
+                if (inner < 0) { why = "map value: " + why; return -1; }
+                p += inner;
+            }
+            return p - start;
         }
 
         // ================================================================ editing
