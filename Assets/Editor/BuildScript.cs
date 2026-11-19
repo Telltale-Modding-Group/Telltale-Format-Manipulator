@@ -44,7 +44,41 @@ public static class BuildScript
             if (Application.isBatchMode) EditorApplication.Exit(1);
             return;
         }
+
+        CopyNameDumps(Path.Combine(outDir, ExeName));
+
         if (Application.isBatchMode) EditorApplication.Exit(0);
+    }
+
+    // The archive name dumps are read from disk at runtime, so they have to sit next to the
+    // player. A player only ships StreamingAssets as loose files, so they are copied into the
+    // built <exe>_Data/StreamingAssets/Names after the build.
+    const string NameDumpSource = "Assets/Resources/Names";
+
+    static void CopyNameDumps(string exePath)
+    {
+        string root = Directory.GetParent(Application.dataPath).FullName;
+        string src = Path.Combine(root, NameDumpSource);
+        if (!Directory.Exists(src))
+        {
+            Debug.LogWarning("[Build] No name dumps at " + NameDumpSource + "; file references will show as hashes.");
+            return;
+        }
+
+        string dataDir = Path.Combine(Path.GetDirectoryName(exePath),
+            Path.GetFileNameWithoutExtension(exePath) + "_Data");
+        string dst = Path.Combine(Path.Combine(dataDir, "StreamingAssets"), "Names");
+
+        int copied = 0;
+        foreach (string file in Directory.GetFiles(src, "*.bin", SearchOption.AllDirectories))
+        {
+            string rel = file.Substring(src.Length).TrimStart('\\', '/');
+            string target = Path.Combine(dst, rel);
+            Directory.CreateDirectory(Path.GetDirectoryName(target));
+            File.Copy(file, target, true);
+            copied++;
+        }
+        Debug.Log("[Build] Copied " + copied + " name dumps to " + dst);
     }
 
     [MenuItem("Tools/Telltale Format Manipulator/Open Build Folder")]
