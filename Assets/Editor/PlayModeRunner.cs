@@ -85,11 +85,15 @@ public static class PlayModeRunner
     {
         try
         {
-            // Both arguments are given explicitly: Unity 2023.1 has no single-argument
-            // FindObjectsByType overload taking FindObjectsInactive, only the two-parameter
-            // form. Passing both keeps this compiling on 2023.1 and on 6000.x alike.
+            // Unity 2023.1 (the Windows 7 target) has no single-argument overload taking
+            // FindObjectsInactive, while Unity 6 deprecated the two-argument form in favour
+            // of exactly that. Both versions are covered by this guard.
+#if UNITY_6000_0_OR_NEWER
+            AppMain[] apps = UnityEngine.Object.FindObjectsByType<AppMain>(FindObjectsInactive.Include);
+#else
             AppMain[] apps = UnityEngine.Object.FindObjectsByType<AppMain>(
                 FindObjectsInactive.Include, FindObjectsSortMode.None);
+#endif
             Log.AppendLine("AppMain instances: " + apps.Length);
             if (apps.Length == 0) { Errors.Add("No AppMain found in the active scene."); return; }
 
@@ -116,6 +120,9 @@ public static class PlayModeRunner
             }
 
             if (propsAt < 0) { Errors.Add("PropsModule is not registered in AppMain."); return; }
+
+            DriveArchives(app, mods);
+
             fActive.SetValue(app, propsAt);
             Log.AppendLine("Switched to Props module (index " + propsAt + ").");
 
@@ -173,6 +180,107 @@ public static class PlayModeRunner
         {
             Errors.Add("DriveUI threw: " + e);
         }
+    }
+
+    /// <summary>
+    /// Drives the Archives module against the real TWD: Definitive sample archive, and then
+    /// runs its folder batch over the sample folder. Reflection is used because the module's
+    /// members are private, exactly as with the Props checks above.
+    /// </summary>
+    static void DriveArchives(AppMain app, IList mods)
+    {
+        int at = -1;
+        for (int i = 0; i < mods.Count; i++)
+            if (mods[i].GetType() == typeof(ArchivesModule)) at = i;
+        if (at < 0) { Errors.Add("ArchivesModule is not registered in AppMain."); return; }
+
+        object mod = mods[at];
+        Type t = mod.GetType();
+
+        FieldInfo fActive = typeof(AppMain).GetField("_activeModule",
+            BindingFlags.NonPublic | BindingFlags.Instance);
+        fActive.SetValue(app, at);
+        Log.AppendLine("Switched to Archives module (index " + at + ").");
+
+        string sample = Path.Combine(Directory.GetCurrentDirectory(),
+            "Assets/ttarch-references/WDC_pc_ProjectSeasonM_anichore.ttarch2");
+        if (!File.Exists(sample)) { Errors.Add("Sample archive missing: " + sample); return; }
+
+        MethodInfo load = t.GetMethod("LoadFile", BindingFlags.NonPublic | BindingFlags.Instance);
+        if (load == null) { Errors.Add("ArchivesModule.LoadFile not found."); return; }
+
+        load.Invoke(mod, new object[] { sample });
+
+        FieldInfo fResult = t.GetField("_result", BindingFlags.NonPublic | BindingFlags.Instance);
+        object result = fResult.GetValue(mod);
+        if (result == null) { Errors.Add("Archives module did not keep a result."); return; }
+
+        PropertyInfo pOk = result.GetType().GetProperty("Ok");
+        PropertyInfo pNamed = result.GetType().GetProperty("NamedCount");
+        PropertyInfo pError = result.GetType().GetProperty("Error");
+        PropertyInfo pKey = result.GetType().GetProperty("Key");
+        PropertyInfo pEntries = result.GetType().GetProperty("Entries");
+
+        bool ok = (bool)pOk.GetValue(result, null);
+        Log.AppendLine("Archive loaded ok=" + ok);
+        if (!ok)
+        {
+            Errors.Add("Archive did not open: " + pError.GetValue(result, null));
+            return;
+        }
+
+        ICollection entries = pEntries.GetValue(result, null) as ICollection;
+        Log.AppendLine("Entries: " + (entries != null ? entries.Count : -1)
+            + "  named: " + pNamed.GetValue(result, null));
+        Log.AppendLine("Detected key: " + (pKey.GetValue(result, null) ?? "none"));
+
+        if (entries == null || entries.Count != 7)
+            Errors.Add("Expected 7 entries from the sample archive, got "
+                + (entries != null ? entries.Count : -1));
+        if ((int)pNamed.GetValue(result, null) != 7)
+            Errors.Add("Expected all 7 names to resolve.");
+
+        // Exercise the batch path over every archive in the sample folder. Update() is called
+        // by the app loop, so the batch is stepped here directly until it finishes.
+        FieldInfo fDone = t.GetField("_batchDone", BindingFlags.NonPublic | BindingFlags.Instance);
+        FieldInfo fRunning = t.GetField("_batchRunning", BindingFlags.NonPublic | BindingFlags.Instance);
+        FieldInfo fFailed = t.GetField("_batchFailed", BindingFlags.NonPublic | BindingFlags.Instance);
+        MethodInfo start = t.GetMethod("StartBatch", BindingFlags.NonPublic | BindingFlags.Instance);
+        MethodInfo step = t.GetMethod("StepBatch", BindingFlags.NonPublic | BindingFlags.Instance);
+
+        if (start != null && step != null && fRunning != null)
+        {
+            string folder = Path.GetDirectoryName(sample);
+            start.Invoke(mod, new object[] { folder, "txt" });
+
+            int guard = 0;
+            while ((bool)fRunning.GetValue(mod) && guard++ < 100) step.Invoke(mod, null);
+
+            ICollection done = fDone.GetValue(mod) as ICollection;
+            Log.AppendLine("Batch processed: " + (done != null ? done.Count : -1)
+                + "  failed: " + fFailed.GetValue(mod));
+
+            string written = Path.Combine(folder, Path.GetFileName(sample) + "_names.txt");
+            Log.AppendLine("Batch output exists: " + File.Exists(written) + "  (" + written + ")");
+            if (File.Exists(written))
+            {
+                string[] lines = File.ReadAllLines(written);
+                Log.AppendLine("Batch output lines: " + lines.Length
+                    + "  first: " + (lines.Length > 0 ? lines[0] : ""));
+                if (lines.Length != 7) Errors.Add("Batch output should hold 7 names, got " + lines.Length);
+                try { File.Delete(written); } catch { }
+            }
+            else
+            {
+                Errors.Add("Batch did not write its name file.");
+            }
+        }
+        else
+        {
+            Errors.Add("Batch methods not found on ArchivesModule.");
+        }
+
+        fActive.SetValue(app, at);
     }
 
     static void Screenshot()

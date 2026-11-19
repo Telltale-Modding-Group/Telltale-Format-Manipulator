@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Text;
 
 namespace TFM.App
 {
@@ -48,44 +49,41 @@ namespace TFM.App
         }
 
         /// <summary>
-        /// Picks a folder. Uses the shell's own folder browser, which unlike the comdlg32
-        /// dialogs above has no equivalent on very old Windows, so it is guarded and may
-        /// return null on those systems.
+        /// Picks a folder using shell32's SHBrowseForFolder. This is the long-standing Win32
+        /// folder browser (present since Windows 2000), so it works on the Windows 7 target as
+        /// well as current Windows. Returns null if the user cancels or the shell is missing.
         /// </summary>
         public static string OpenFolder(string title, string initialDir)
         {
 #if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
+            IntPtr pidl = IntPtr.Zero;
             try
             {
                 if (!string.IsNullOrEmpty(initialDir) && !Directory.Exists(initialDir)) initialDir = null;
-                // Modern shell folder picker: an ordinary COM object, no Vista-only APIs.
-                Type dialogType = Type.GetTypeFromProgID("Shell.Application");
-                if (dialogType == null) return null;
-                object shell = Activator.CreateInstance(dialogType);
-                try
-                {
-                    // Flags 0x1 = only return file-system folders, so the user cannot pick
-                    // a virtual shell folder that has no path.
-                    const int ReturnOnlyFileSystem = 0x1;
-                    object folder = dialogType.InvokeMember("BrowseForFolder",
-                        System.Reflection.BindingFlags.InvokeMethod, null, shell,
-                        new object[] { 0, title ?? "Choose a folder", ReturnOnlyFileSystem, initialDir });
-                    if (folder == null) return null; // cancelled
 
-                    object self = folder.GetType().InvokeMember("Self",
-                        System.Reflection.BindingFlags.GetProperty, null, folder, null);
-                    string path = (string)self.GetType().InvokeMember("Path",
-                        System.Reflection.BindingFlags.GetProperty, null, self, null);
-                    return string.IsNullOrEmpty(path) ? null : path;
-                }
-                finally
-                {
-                    Marshal.ReleaseComObject(shell);
-                }
+                BROWSEINFOW bi = new BROWSEINFOW();
+                bi.hwndOwner = GetActiveWindow();
+                bi.lpszTitle = title ?? "Choose a folder";
+                // BIF_RETURNONLYFSDIRS (0x1): only real folders, so the result always has a path.
+                // BIF_EDITBOX (0x10): lets the path be typed. Neither needs OLE to be initialised,
+                // unlike BIF_NEWDIALOGSTYLE, which can fail inside Unity.
+                bi.ulFlags = 0x0001 | 0x0010;
+
+                pidl = SHBrowseForFolderW(ref bi);
+                if (pidl == IntPtr.Zero) return null; // cancelled
+
+                StringBuilder path = new StringBuilder(MaxPath);
+                if (!SHGetPathFromIDListW(pidl, path)) return null;
+                string result = path.ToString();
+                return string.IsNullOrEmpty(result) ? null : result;
             }
             catch
             {
                 return null;
+            }
+            finally
+            {
+                if (pidl != IntPtr.Zero) Marshal.FreeCoTaskMem(pidl);
             }
 #else
             return null;
@@ -137,6 +135,27 @@ namespace TFM.App
 
         [DllImport("user32.dll")]
         static extern IntPtr GetActiveWindow();
+
+        // ---- folder browser (shell32) ----
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        struct BROWSEINFOW
+        {
+            public IntPtr hwndOwner;
+            public IntPtr pidlRoot;
+            public string pszDisplayName;
+            public string lpszTitle;
+            public int ulFlags;
+            public IntPtr lpfn;
+            public IntPtr lParam;
+            public int iImage;
+        }
+
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+        static extern IntPtr SHBrowseForFolderW(ref BROWSEINFOW browse);
+
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+        static extern bool SHGetPathFromIDListW(IntPtr pidl, StringBuilder path);
 
         static string Show(bool save, string title, string filter, string initialDir, string defaultName, string defaultExt)
         {
