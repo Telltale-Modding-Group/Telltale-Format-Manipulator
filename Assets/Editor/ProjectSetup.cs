@@ -93,6 +93,7 @@ public static class ProjectSetup
 
         app.propTypeNames = AssetDatabase.LoadAssetAtPath<TextAsset>("Assets/Data/PropsTypeNames.bytes");
         app.propKeyNames = AssetDatabase.LoadAssetAtPath<TextAsset>("Assets/Data/PropsKeyNames.bytes");
+        app.propTypeLayouts = AssetDatabase.LoadAssetAtPath<TextAsset>("Assets/Data/PropsTypeLayouts.bytes");
         if (app.propTypeNames == null || app.propKeyNames == null)
             Debug.LogWarning("[ProjectSetup] Props name databases missing under Assets/Data (PropsTypeNames.bytes, PropsKeyNames.bytes). Prop type and key names will show as hashes.");
 

@@ -40,6 +40,9 @@ namespace TFM.App
         bool _replaceExisting = true;
         bool _removeFromDonor;
 
+        // Picker for changing a file reference (mesh, texture, chore...) to another name.
+        readonly ListPicker _refPicker = new ListPicker();
+
         void SetStatus(string msg, bool error)
         {
             _statusText = msg;
@@ -109,6 +112,13 @@ namespace TFM.App
             }
 
             GUILayout.EndArea();
+
+            // The picker is a modal window, so it must draw outside the module's area.
+            if (_refPicker.IsOpen)
+            {
+                Rect screen = _ctx.ScreenRect.width > 0 ? _ctx.ScreenRect : new Rect(0, 0, Screen.width, Screen.height);
+                _refPicker.OnGUI(screen);
+            }
         }
 
         // ================================================================ chrome
@@ -447,18 +457,11 @@ namespace TFM.App
                     }
 
                 case PropKind.Symbol:
-                    {
-                        ulong h = el.Value.Length >= 8 ? PropFile.ReadU64(el.Value, 0) : 0UL;
-                        string file = FileLabel(h);
-                        GUILayout.Label(file != null ? file : "(no name for this reference)", GuiUtil.Note);
-                        if (file != null)
-                            GUILayout.Label("hash 0x" + h.ToString("X16"), GuiUtil.Note);
-                        return false;
-                    }
+                    return DrawReferenceEditor(el, index, 0, "this reference");
 
                 default:
                     {
-                        DrawFileReferences(el.Value);
+                        DrawReferenceSlots(el.Value, index);
                         GUILayout.Label(HexDump(el.Value), GuiUtil.Mono);
                         return false;
                     }
@@ -466,23 +469,89 @@ namespace TFM.App
         }
 
         /// <summary>
-        /// Lists the file references inside an undecoded value: every 8-byte slot that matches a
-        /// name from the archive dumps. Layout is unknown, so each slot is checked on its own.
+        /// Editor for one 8-byte file reference at <paramref name="offset"/> inside an element's
+        /// value. Returns true when the bytes changed: the new hash is written in place, so the
+        /// value stays the same size and everything after it keeps its layout.
         /// </summary>
-        void DrawFileReferences(byte[] value)
+        bool DrawReferenceEditor(PropElement el, int elementIndex, int offset, string caption)
+        {
+            if (offset + 8 > el.Value.Length)
+            {
+                GUILayout.Label("The value is too short to hold a reference.", GuiUtil.Note);
+                return false;
+            }
+
+            ulong h = PropFile.ReadU64(el.Value, offset);
+            string file = FileLabel(h);
+            GUILayout.Label(caption + ": " + (file ?? "(no name for this hash)"), GuiUtil.Note);
+            GUILayout.Label("hash 0x" + h.ToString("X16"), GuiUtil.Note);
+
+            GUILayout.BeginHorizontal();
+            bool pick = GUILayout.Button("Replace reference...", GuiUtil.W(170));
+            bool copy = GUILayout.Button("Copy hash", GuiUtil.W(90));
+            GUILayout.EndHorizontal();
+            GUILayout.Label("Only names from the loaded archive dumps can be chosen, so every reference"
+                            + " always shows its name again after saving.", GuiUtil.Note);
+
+            if (copy)
+            {
+                GUIUtility.systemCopyBuffer = "0x" + h.ToString("X16");
+                SetStatus("Copied 0x" + h.ToString("X16") + ".", false);
+            }
+            if (pick) OpenReferencePicker(el, elementIndex, offset);
+            return false;
+        }
+
+        /// <summary>
+        /// Lists every 8-byte slot in an undecoded value that resolves to a known file name, and
+        /// makes each one editable. Layout is unknown, so slots are recognised by their content.
+        /// </summary>
+        void DrawReferenceSlots(byte[] value, int elementIndex)
         {
             int shown = 0;
             for (int o = 0; o + 8 <= value.Length && shown < 32; o++)
             {
                 ulong h = PropFile.ReadU64(value, o);
-                if (h == 0) continue;
-                string file = FileLabel(h);
-                if (file == null) continue;
-                if (shown == 0) GUILayout.Label("References found inside this value:", GuiUtil.SubHeader);
-                GUILayout.Label("  +" + o + "   " + file, GuiUtil.Note);
+                if (h == 0 || FileLabel(h) == null) continue;
+                if (shown == 0) GUILayout.Label("File references inside this value:", GuiUtil.SubHeader);
+                DrawReferenceEditor(_file.Fields[_selected].Elements[elementIndex], elementIndex, o, "+" + o);
                 shown++;
-                o += 7; // the reference is 8 bytes wide; skip past it
+                o += 7;
             }
+        }
+
+        void OpenReferencePicker(PropElement el, int elementIndex, int offset)
+        {
+            IReadOnlyList<string> names = _ctx.PropNames.FileNameList;
+            if (names.Count == 0)
+            {
+                SetStatus("No archive name dumps are loaded, so there is nothing to pick from.", true);
+                return;
+            }
+
+            ulong current = PropFile.ReadU64(el.Value, offset);
+            string currentName = FileLabel(current);
+            int preselect = -1;
+            if (currentName != null)
+            {
+                // The list is sorted case-insensitively; scan only until the first match.
+                for (int i = 0; i < names.Count; i++)
+                {
+                    if (string.Equals(names[i], currentName, StringComparison.OrdinalIgnoreCase)) { preselect = i; break; }
+                }
+            }
+
+            // Names are ASCII; the target name is shown with its hash before applying.
+            Action<int> onPick = chosen =>
+            {
+                ulong hash = HashDatabase.Crc64(names[chosen]);
+                PropFile.WriteU64(el.Value, offset, hash);
+                _dirty = true;
+                GuiUtil.ResetBuffers();
+                SetStatus("Reference set to " + names[chosen] + " (0x" + hash.ToString("X16") + "). Save to write the file.", false);
+            };
+
+            _refPicker.Open("Choose the file this reference should point at", names, preselect, null, onPick);
         }
 
         static string HexDump(byte[] b)

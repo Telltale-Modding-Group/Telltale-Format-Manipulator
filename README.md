@@ -2,9 +2,15 @@
 
 A Telltale Games Modding Tool
 
-Very WIP (including readme), first release soon
+WIP (including readme), first release soon
 
-Currently supports manipulating bones inside of the .skl directly without the need to use a 3D editor.
+Made in Unity 6000.6.8f1 to take full advantage of all of the official AI-integration tools. Final build made in Unity 2023.1.22f1, backported for Windows 7 support.
+
+Currently supports:
+
+Archives: dump names of ttarch archives as .txt or as a binary (supposedly all games).
+Bones: manipulating bones inside of the .skl directly without the need to use a 3D editor, changing their names coordinates (supposedly all games).
+Props: reading, editing and combining .prop file properties (TWDTTDS only).
 
 It was entirely vide-coded using Claude Opus model.
 
@@ -16,6 +22,4 @@ BoneNames.HashDB file was taken from TelltaleGames_D3DMesh (renamed BoneNames.Ha
 
 PropertySet-Keys.txt and global.vdb.json from TelltaleToolKit were used to create lists of names.
 
-Everything else here is made by Claude. 
-
-
+Everything else here is made by Claude.

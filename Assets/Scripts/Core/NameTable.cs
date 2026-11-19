@@ -68,6 +68,21 @@ namespace TFM.Core
             return byHash.TryGetValue(hash, out n) ? n : null;
         }
 
+        List<string> sorted;
+        /// <summary>All names, sorted case-insensitively. Built once, on first use.</summary>
+        public IReadOnlyList<string> SortedNames
+        {
+            get
+            {
+                if (sorted == null)
+                {
+                    sorted = new List<string>(byHash.Values);
+                    sorted.Sort(StringComparer.OrdinalIgnoreCase);
+                }
+                return sorted;
+            }
+        }
+
         static string Latin1(byte[] d, int start, int len)
         {
             char[] chars = new char[len];
@@ -96,6 +111,9 @@ namespace TFM.Core
 
         public string Type(ulong hash) { return TypeNames.NameOf(hash); }
         public string Key(ulong hash) { return KeyNames.NameOf(hash); }
+
+        /// <summary>Every file name from the archive dumps, sorted, for the reference picker.</summary>
+        public IReadOnlyList<string> FileNameList { get { return FileNames.SortedNames; } }
 
         /// <summary>The referenced file name, or null when it is not in the name dumps.</summary>
         public string FileRef(ulong hash) { return FileNames.NameOf(hash); }

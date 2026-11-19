@@ -21,6 +21,9 @@ namespace TFM.App
         [Tooltip("Assets/Data/PropsKeyNames.bytes - property key names for .prop files.")]
         public TextAsset propKeyNames;
 
+        [Tooltip("Assets/Data/PropsTypeLayouts.bytes - measured .prop type layouts.")]
+        public TextAsset propTypeLayouts;
+
         [Tooltip("Folder of archive name dumps (Dump Binary output). Read at startup to resolve "
                  + "mesh, texture and chore references in .prop files. Relative to the data folder.")]
         public string nameDumpFolder = "Resources/Names";
@@ -84,6 +87,8 @@ namespace TFM.App
                 names.TypeNames = NameTable.Load(propTypeNames.bytes, "TFMTYPES", "type names");
             if (propKeyNames != null)
                 names.KeyNames = NameTable.Load(propKeyNames.bytes, "TFMKEYNM", "key names");
+            if (propTypeLayouts != null)
+                PropLayouts.Load(propTypeLayouts.bytes);
 
             // Archive name dumps are read straight off disk at startup: there are hundreds of
             // them, and they change whenever more archives are dumped.
