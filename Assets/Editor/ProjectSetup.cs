@@ -94,6 +94,10 @@ public static class ProjectSetup
         app.propTypeNames = AssetDatabase.LoadAssetAtPath<TextAsset>("Assets/Data/PropsTypeNames.bytes");
         app.propKeyNames = AssetDatabase.LoadAssetAtPath<TextAsset>("Assets/Data/PropsKeyNames.bytes");
         app.propTypeLayouts = AssetDatabase.LoadAssetAtPath<TextAsset>("Assets/Data/PropsTypeLayouts.bytes");
+        app.metaLayouts = AssetDatabase.LoadAssetAtPath<TextAsset>("Assets/Data/MetaLayouts.bytes");
+        app.logicNames = AssetDatabase.LoadAssetAtPath<TextAsset>("Assets/Data/LogicNames.bytes");
+        if (app.metaLayouts == null)
+            Debug.LogWarning("[ProjectSetup] Assets/Data/MetaLayouts.bytes is missing. Chores and dialogues cannot be opened without it.");
         if (app.propTypeNames == null || app.propKeyNames == null)
             Debug.LogWarning("[ProjectSetup] Props name databases missing under Assets/Data (PropsTypeNames.bytes, PropsKeyNames.bytes). Prop type and key names will show as hashes.");
 

@@ -24,6 +24,12 @@ namespace TFM.App
         [Tooltip("Assets/Data/PropsTypeLayouts.bytes - measured .prop type layouts.")]
         public TextAsset propTypeLayouts;
 
+        [Tooltip("Assets/Data/MetaLayouts.bytes - MetaStream class layouts used to read .chore and .dlog files.")]
+        public TextAsset metaLayouts;
+
+        [Tooltip("Assets/Data/LogicNames.bytes - strings from the game's Lua scripts, used to name hashed logic and property keys.")]
+        public TextAsset logicNames;
+
         [Tooltip("Folder of archive name dumps (Dump Binary output). Read at startup to resolve "
                  + "mesh, texture and chore references in .prop files. Relative to the data folder.")]
         public string nameDumpFolder = "Resources/Names";
@@ -90,6 +96,8 @@ namespace TFM.App
                 names.KeyNames = NameTable.Load(propKeyNames.bytes, "TFMKEYNM", "key names");
             if (propTypeLayouts != null)
                 PropLayouts.Load(propTypeLayouts.bytes);
+            LoadMetaLayouts();
+            LoadLogicNames();
 
             // Archive name dumps are read straight off disk at startup: there are hundreds of
             // them, and they change whenever more archives are dumped.
@@ -100,6 +108,40 @@ namespace TFM.App
                 if (files.Count == 0)
                     _status = "No archive name dumps found, so file references will show as hashes."
                               + " Looked in: " + string.Join("; ", NameDumpRoots(nameDumpFolder));
+            }
+        }
+
+        void LoadLogicNames()
+        {
+            TextAsset asset = logicNames;
+#if UNITY_EDITOR
+            if (asset == null) asset = UnityEditor.AssetDatabase.LoadAssetAtPath<TextAsset>("Assets/Data/LogicNames.bytes");
+#endif
+            if (asset != null) _ctx.PropNames.LogicNames = NameTable.Load(asset.bytes, "TFMLOGIC", "logic names");
+        }
+
+        void LoadMetaLayouts()
+        {
+            TextAsset asset = metaLayouts;
+#if UNITY_EDITOR
+            // Scenes generated before this field existed still work in the editor.
+            if (asset == null) asset = UnityEditor.AssetDatabase.LoadAssetAtPath<TextAsset>("Assets/Data/MetaLayouts.bytes");
+#endif
+            if (asset == null)
+            {
+                _status = "MetaStream layouts are missing (AppMain.metaLayouts), so chores and dialogues cannot be opened."
+                          + " Regenerate the scene (Tools menu) to wire Assets/Data/MetaLayouts.bytes.";
+                _statusError = true;
+                return;
+            }
+            try
+            {
+                TFM.Core.Meta.MetaLayouts.SetCurrent(TFM.Core.Meta.MetaLayouts.Load(asset.bytes));
+            }
+            catch (Exception e)
+            {
+                _status = "Could not read MetaLayouts.bytes: " + e.Message;
+                _statusError = true;
             }
         }
 
@@ -172,6 +214,20 @@ namespace TFM.App
             _modules.Add(new ArchivesModule());
             _modules.Add(new BonesModule());
             _modules.Add(new PropsModule());
+            _modules.Add(new ChoresModule());
+            _modules.Add(new DialoguesModule());
+
+            _ctx.OpenInModule = (title, path) =>
+            {
+                for (int i = 0; i < _modules.Count; i++)
+                {
+                    IFileOpener opener = _modules[i] as IFileOpener;
+                    if (opener == null || _modules[i].Title != title) continue;
+                    _activeModule = i;
+                    return opener.OpenFile(path);
+                }
+                return false;
+            };
 
             for (int i = 0; i < _modules.Count; i++) _modules[i].Initialize(_ctx);
         }
