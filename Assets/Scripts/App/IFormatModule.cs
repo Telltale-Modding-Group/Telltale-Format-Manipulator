@@ -52,6 +52,18 @@ namespace TFM.App
         /// <summary>Full window rect in GUI coordinates (after UI scaling). Use it to place popups.</summary>
         public Rect ScreenRect { get; set; }
 
+        /// <summary>
+        /// Switches to the module with this title and opens a file in it (the module must implement
+        /// IFileOpener). Set by AppMain. Returns false when no such module exists or the open failed.
+        /// </summary>
+        public Func<string, string, bool> OpenInModule { get; set; }
+
+        /// <summary>
+        /// Text of a dialogue line by id from the language file the Dialogues module has loaded, or
+        /// null. Lets the chore editor show what a LanguageRes resource says.
+        /// </summary>
+        public Func<uint, string> LineText { get; set; }
+
         public void SetStatus(string message, bool error = false)
         {
             if (_status != null) _status(message, error);

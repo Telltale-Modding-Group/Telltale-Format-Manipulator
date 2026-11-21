@@ -163,6 +163,23 @@ namespace TFM.Core
 
         public static string Hex(ulong h) { return "0x" + h.ToString("X16"); }
 
+        /// <summary>
+        /// Continues a CRC64 over more text: Crc64Continue(Crc64(a), b) == Crc64(a + b). Lets many
+        /// suffixes be tried on one prefix without hashing the prefix again.
+        /// </summary>
+        public static ulong Crc64Continue(ulong crc, string s)
+        {
+            if (s == null) return crc;
+            for (int i = 0; i < s.Length; i++)
+            {
+                char ch = s[i];
+                if (ch >= 'A' && ch <= 'Z') ch = (char)(ch + 32);
+                byte b = ch < 128 ? (byte)ch : (byte)'?';
+                crc = Table[((crc >> 56) ^ b) & 0xFF] ^ (crc << 8);
+            }
+            return crc;
+        }
+
         public static bool TryParseHex(string s, out ulong h)
         {
             h = 0;
