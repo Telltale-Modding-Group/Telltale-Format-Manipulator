@@ -266,6 +266,12 @@ namespace TFM.App
                 ulong h;
                 if (HashDatabase.TryParseHex(e, out h) && h != v.Bits) { v.Bits = h; changed = true; }
             }
+            if (GUILayout.Button("Copy", GuiUtil.W(48))) GUIUtility.systemCopyBuffer = "0x" + v.Bits.ToString("X16");
+            if (!ReadOnly && GUILayout.Button("Paste", GuiUtil.W(50)))
+            {
+                ulong h;
+                if (HashDatabase.TryParseHex((GUIUtility.systemCopyBuffer ?? "").Trim(), out h) && h != v.Bits) { v.Bits = h; changed = true; }
+            }
             if (PickHash != null && !ReadOnly && GUILayout.Button("Name...", GuiUtil.W(64))) PickHash(v);
             return changed;
         }

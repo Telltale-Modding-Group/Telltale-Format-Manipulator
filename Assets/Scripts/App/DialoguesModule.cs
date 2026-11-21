@@ -55,6 +55,16 @@ namespace TFM.App
         readonly Dictionary<MetaValue, string> _newItemName = new Dictionary<MetaValue, string>();
         static readonly string[] KeyTypes = { "bool", "int", "float", "String" };
 
+        // Node graph (main view) and its options
+        readonly DlgGraphView _graph = new DlgGraphView();
+        bool _showOutline;
+        bool _showTags;
+        string _find = "";
+        int _findIndex = -1;
+        List<MetaValue> _findHits;
+        string _findFor;
+        float _panelFrac = 0.36f;
+
         Dictionary<ulong, string> _choreIndex;
         string _choreIndexFor;
 
@@ -66,6 +76,15 @@ namespace TFM.App
             _choreFolder = PlayerPrefs.GetString(PrefChoreFolder, "");
             _langFolder = PlayerPrefs.GetString(PrefLangFolder, "");
             _tree.SymbolName = Lookup;
+            _graph.Describe = DescribeBox;
+            _graph.ColorOf = BoxColor;
+            _graph.OnSelect = o => { _selected = o; _inspScroll = Vector2.zero; GuiUtil.ResetBuffers(); };
+            _graph.OnActivate = o =>
+            {
+                if (o.Type == "DlgNodeJump" && o["mhJumpToDlg"] != null && o["mhJumpToDlg"].Bits != 0) { OpenOtherDialogue(o["mhJumpToDlg"].Bits); return true; }
+                return false;
+            };
+            _graph.FollowJumps = PlayerPrefs.GetInt("tfm.dlg.followJumps", 0) == 1;
             _tree.PickHash = v => _picker.Open("Choose a name for this value", null, v.Bits, (h, n) =>
             {
                 v.Bits = h;
@@ -85,6 +104,8 @@ namespace TFM.App
         void MarkDirty(string msg)
         {
             _dirty = true;
+            _graph.Invalidate();
+            _findFor = null;
             _appliedSearch = null;
             if (msg != null) SetStatus(msg + " Save to write the file.", false);
         }
@@ -286,7 +307,10 @@ namespace TFM.App
         }
 
         /// <summary>The test that decides whether a node or branch is used, as one line, or null.</summary>
-        string ConditionText(MetaValue o)
+        string ConditionText(MetaValue o) { return ConditionText(o, false); }
+
+        /// <summary><paramref name="forBox"/>: leave out "on input" (a choice waiting for the player), which every choice has.</summary>
+        string ConditionText(MetaValue o, bool forBox)
         {
             List<string> parts = new List<string>();
             MetaValue vis = DlgDocument.VisibilityConditions(o);
@@ -303,7 +327,7 @@ namespace TFM.App
                 {
                     if (c.Type == "DlgConditionRule") { string rt = RuleText(c["mRule"]); if (!string.IsNullOrEmpty(rt)) parts.Add(rt); }
                     else if (c.Type == "DlgConditionTime") parts.Add("after " + (c["mSeconds"] != null ? c["mSeconds"].Summary() : "?") + " s");
-                    else if (c.Type == "DlgConditionInput") parts.Add("on input");
+                    else if (c.Type == "DlgConditionInput" && !forBox) parts.Add("on input");
                 }
             return parts.Count == 0 ? null : string.Join("; ", parts.ToArray());
         }
@@ -335,21 +359,25 @@ namespace TFM.App
             }
             else
             {
+                DrawGraphToolbar();
                 GUILayout.BeginHorizontal();
-                float lw = Mathf.Clamp(_area.width * 0.22f, 200f, 400f);
-                float cw = Mathf.Clamp(_area.width * 0.33f, 260f, 660f);
-                GUILayout.BeginVertical(GUILayout.Width(lw));
-                DrawOutline();
-                GUILayout.EndVertical();
-                GUILayout.BeginVertical(GUI.skin.box, GUILayout.Width(cw));
-                DrawChain();
-                GUILayout.EndVertical();
-                GUILayout.BeginVertical(GUI.skin.box, GUILayout.ExpandWidth(true));
+                if (_showOutline)
+                {
+                    GUILayout.BeginVertical(GUILayout.Width(Mathf.Clamp(_area.width * 0.2f, 200f, 360f)));
+                    DrawOutline();
+                    GUILayout.EndVertical();
+                }
+                // The graph takes whatever the properties panel leaves.
+                float pw = Mathf.Clamp(_area.width * _panelFrac, 300f, 900f);
+                Rect canvas = GUILayoutUtility.GetRect(100f, 100f, GUILayout.ExpandWidth(true), GUILayout.ExpandHeight(true));
+                GUILayout.BeginVertical(GUI.skin.box, GUILayout.Width(pw), GUILayout.ExpandHeight(true));
+                GUILayout.Label("Properties", GuiUtil.SubHeader);
                 _inspScroll = GUILayout.BeginScrollView(_inspScroll, false, true, GUILayout.ExpandHeight(true));
                 DrawInspector();
                 GUILayout.EndScrollView();
                 GUILayout.EndVertical();
                 GUILayout.EndHorizontal();
+                if (canvas.width > 20f && canvas.height > 20f && Event.current.type != EventType.Layout) _graph.OnGUI(canvas);
             }
             GUILayout.EndArea();
 
@@ -383,24 +411,24 @@ namespace TFM.App
             if (GUILayout.Button("Guess key names", GuiUtil.W(130))) _ctx.RunDeferred(GuessKeyNames);
             GUI.enabled = true;
             if (GUILayout.Button("Import names...", GuiUtil.W(120))) BrowseImportNames();
-            GUI.enabled = true;
-            GUILayout.Label(_lang != null ? "Language: " + Path.GetFileName(_lang.Path) + " (" + _lang.Count + " lines)" + (_lang.Dirty ? " *" : "")
-                : "Language: none", _lang != null ? GuiUtil.Note : GuiUtil.Warning, GUILayout.ExpandWidth(true));
-            GUILayout.Label("Chores: " + (string.IsNullOrEmpty(_choreFolder) ? "dialogue folder" : _choreFolder), GuiUtil.Note, GuiUtil.MaxW(360));
+            GUILayout.FlexibleSpace();
             GUILayout.EndHorizontal();
-            if (_doc != null && _lang == null)
-                GUILayout.Label(_langNote + " Lines are shown as raw ids; pick a language file to see the text.", GuiUtil.Warning);
 
+            // One clipped status line: file, language file, chore folder.
+            StringBuilder b = new StringBuilder();
             if (_doc != null)
             {
-                StringBuilder b = new StringBuilder();
                 b.Append(Path.GetFileName(_doc.File.SourcePath ?? "(unsaved)"));
                 if (_dirty) b.Append(" *");
-                b.Append("   |   ").Append(_doc.Folders.Count).Append(" folders, ").Append(_doc.Nodes.Count).Append(" nodes");
-                b.Append("   |   project ").Append(_doc.ProjectId);
-                if (!_doc.File.FullyDecoded) b.Append("   |   ").Append(_doc.File.RawRegions).Append(" undecoded region(s), kept as-is");
-                GUILayout.Label(b.ToString(), GuiUtil.Note);
+                b.Append("  |  ").Append(_doc.Nodes.Count).Append(" nodes");
+                if (!_doc.File.FullyDecoded) b.Append("  |  ").Append(_doc.File.RawRegions).Append(" undecoded region(s) kept as-is");
+                b.Append("  |  ");
             }
+            b.Append(_lang != null ? "language " + Path.GetFileName(_lang.Path) + " (" + _lang.Count + " lines)" + (_lang.Dirty ? " *" : "") : "no language file");
+            b.Append("  |  chores from ").Append(string.IsNullOrEmpty(_choreFolder) ? "the dialogue's folder" : _choreFolder);
+            GUILayout.Label(b.ToString(), ClipRows.Note);
+            if (_doc != null && _lang == null)
+                GUILayout.Label(_langNote + " Lines are shown as raw ids; pick a language file to see the text.", GuiUtil.Warning);
         }
 
         // ================================================================ file I/O
@@ -466,6 +494,9 @@ namespace TFM.App
             {
                 DlgDocument doc = DlgDocument.Load(path);
                 _doc = doc;
+                _graph.SetDocument(doc);
+                _findHits = null;
+                _findFor = null;
                 _path = path;
                 _dirty = false;
                 _back.Clear();
@@ -480,6 +511,7 @@ namespace TFM.App
                 _lang = null;
                 _ctx.LineText = null;
                 AutoLanguage();
+                _graph.Invalidate();
                 // Start on the first folder's first branch.
                 for (int f = 0; f < doc.Folders.Count && _branch == null; f++)
                 {
@@ -515,6 +547,7 @@ namespace TFM.App
             {
                 _lang = LanguageDb.Load(path);
                 _langNote = "";
+                _graph.Invalidate();
                 LanguageDb shared = _lang;
                 _ctx.LineText = id => shared.Has(id) ? (string.IsNullOrEmpty(shared.Speaker(id)) ? "" : shared.Speaker(id) + ": ") + shared.Text(id) : null;
                 // Report lines the dialogue uses that this language file lacks.
@@ -648,135 +681,277 @@ namespace TFM.App
             }
         }
 
-        void PushBack()
-        {
-            _back.Add(new KeyValuePair<MetaValue, ulong>(_branch, _chainStart));
-            if (_back.Count > 100) _back.RemoveAt(0);
-        }
-
         void ShowBranch(MetaValue child, bool remember)
         {
-            if (remember) PushBack();
             _branch = child;
-            _chainStart = DlgDocument.LinkId(DlgDocument.ChildLink(child));
             _selected = child;
-            _chainScroll = Vector2.zero;
+            _graph.Focus(child);
+            _inspScroll = Vector2.zero;
             GuiUtil.ResetBuffers();
         }
 
-        /// <summary>Shows the chain a node is in (from its branch when it has one) and selects the node.</summary>
+        /// <summary>Selects a node and scrolls the graph to it.</summary>
         void ShowNode(MetaValue node)
         {
-            PushBack();
-            DlgDocument.ChildInfo head = _doc.ChainHead(node);
-            if (head != null)
-            {
-                _branch = head.Child;
-                _chainStart = DlgDocument.LinkId(DlgDocument.ChildLink(head.Child));
-            }
-            else
-            {
-                _branch = null;
-                // Walk back to the first node of this loose chain.
-                MetaValue cur = node;
-                HashSet<ulong> seen = new HashSet<ulong>();
-                while (seen.Add(DlgDocument.Id(cur)))
-                {
-                    MetaValue p = _doc.NodeById(DlgDocument.LinkId(DlgDocument.PrevLink(cur)));
-                    if (p == null) break;
-                    cur = p;
-                }
-                _chainStart = DlgDocument.Id(cur);
-            }
             _selected = node;
+            _graph.Focus(node);
+            _inspScroll = Vector2.zero;
             GuiUtil.ResetBuffers();
         }
 
-        // ================================================================ chain
-        void DrawChain()
+        // ================================================================ graph
+        void DrawGraphToolbar()
         {
             GUILayout.BeginHorizontal();
-            GUI.enabled = _back.Count > 0;
-            if (GUILayout.Button("< Back", GuiUtil.W(70)))
+            if (GUILayout.Button("Fit", GuiUtil.W(44))) _graph.Fit();
+            if (GUILayout.Button("+", GuiUtil.W(28))) _graph.ZoomBy(1.25f);
+            if (GUILayout.Button("-", GuiUtil.W(28))) _graph.ZoomBy(0.8f);
+            bool fj = GUILayout.Toggle(_graph.FollowJumps, " Follow jumps", GuiUtil.W(115));
+            if (fj != _graph.FollowJumps)
             {
-                KeyValuePair<MetaValue, ulong> b = _back[_back.Count - 1];
-                _back.RemoveAt(_back.Count - 1);
-                _branch = b.Key;
-                _chainStart = b.Value;
-                _selected = _branch;
-                GuiUtil.ResetBuffers();
+                _graph.FollowJumps = fj;
+                PlayerPrefs.SetInt("tfm.dlg.followJumps", fj ? 1 : 0);
+                _graph.Invalidate();
+                _graph.Fit();
             }
-            GUI.enabled = true;
-            string where = "Chain";
-            if (_branch != null)
+            _graph.ShowJumpArrows = GUILayout.Toggle(_graph.ShowJumpArrows, " Jump arrows", GuiUtil.W(110));
+            bool st = GUILayout.Toggle(_showTags, " Tags", GuiUtil.W(65));
+            if (st != _showTags) { _showTags = st; _graph.Invalidate(); }
+            _showOutline = GUILayout.Toggle(_showOutline, " List", GuiUtil.W(60));
+            GUILayout.FlexibleSpace();
+            GUILayout.Label("Find", GuiUtil.W(34));
+            GUI.SetNextControlName("dlgFind");
+            _find = GUILayout.TextField(_find ?? "", GuiUtil.MinW(100), GuiUtil.MaxW(200));
+            bool enter = Event.current.type == EventType.KeyDown && (Event.current.keyCode == KeyCode.Return || Event.current.keyCode == KeyCode.KeypadEnter)
+                         && GUI.GetNameOfFocusedControl() == "dlgFind";
+            if (GUILayout.Button("Next", GuiUtil.W(50)) || enter)
             {
-                DlgDocument.ChildInfo ci = _doc.ChildInfoOf(_branch);
-                if (ci != null)
-                {
-                    MetaValue folder = _doc.FolderOfChild(_branch);
-                    where = folder != null ? "Folder branch" : ci.Set.Label + " of " + DlgDocument.Kind(ci.Owner) + " " + ShortId(DlgDocument.Id(ci.Owner));
-                }
-            }
-            GUILayout.Label(where, GuiUtil.SubHeader);
-            if (_branch != null)
-            {
-                DlgDocument.ChildInfo ci = _doc.ChildInfoOf(_branch);
-                if (ci != null && _doc.FolderOfChild(_branch) == null && GUILayout.Button("Up to parent", GuiUtil.W(100)))
-                    ShowNode(ci.Owner);
+                if (enter) Event.current.Use();
+                FindNext();
             }
             GUILayout.EndHorizontal();
+            GUILayout.Label("Drag to pan, wheel to zoom, click a box to edit it, double-click a jump to follow it. Red arrows are jumps."
+                + " Follow jumps puts conversations reached by a jump under that jump.", ClipRows.Note);
+        }
 
-            _chainScroll = GUILayout.BeginScrollView(_chainScroll, false, true, GUILayout.ExpandHeight(true));
-            if (_branch != null)
+        void FindNext()
+        {
+            string q = (_find ?? "").Trim();
+            if (q.Length == 0) return;
+            if (_findFor != q || _findHits == null)
             {
-                if (GUILayout.Button("Branch: " + Clip(ChildSummary(_branch), 80), ReferenceEquals(_selected, _branch) ? ClipRows.Selected : ClipRows.Row))
-                    _selected = _branch;
+                _findHits = _graph.Find(q);
+                _findFor = q;
+                _findIndex = -1;
             }
-            List<MetaValue> chain = _doc.Chain(_chainStart);
-            if (chain.Count == 0) GUILayout.Label("This branch has no nodes.", GuiUtil.Note);
-            for (int i = 0; i < chain.Count; i++)
+            if (_findHits.Count == 0) { SetStatus("Nothing in this dialogue matches \"" + q + "\".", true); return; }
+            _findIndex = (_findIndex + 1) % _findHits.Count;
+            ShowNode(_findHits[_findIndex]);
+            SetStatus("Match " + (_findIndex + 1) + " of " + _findHits.Count + ".", false);
+        }
+
+        static readonly System.Text.RegularExpressions.Regex Tags = new System.Text.RegularExpressions.Regex(@"\{[^}]*\}|\[[^\]]*\]");
+
+        /// <summary>A line as the player sees it: acting tags {..} and recording notes [..] removed.</summary>
+        public static string Subtitle(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return "";
+            string t = Tags.Replace(text, " ");
+            return System.Text.RegularExpressions.Regex.Replace(t, @"\s+", " ").Trim();
+        }
+
+        string ShowText(string raw) { return _showTags ? (raw ?? "").Trim() : Subtitle(raw); }
+
+        /// <summary>Speaker and line for a box. Raw id text when the language file is missing.</summary>
+        string BoxLine(uint id, out string speaker)
+        {
+            speaker = null;
+            if (_lang == null || !_lang.Has(id)) return LineText(id);
+            speaker = _lang.Speaker(id);
+            return ShowText(_lang.Text(id));
+        }
+
+        string ChoreText(MetaValue v)
+        {
+            if (v == null || v.Bits == 0) return null;
+            return Lookup(v.Bits) ?? "0x" + v.Bits.ToString("X16");
+        }
+
+        static string FirstLines(string s, int n)
+        {
+            if (string.IsNullOrEmpty(s)) return "";
+            string[] parts = s.Replace("\r", "").Split('\n');
+            List<string> keep = new List<string>();
+            for (int i = 0; i < parts.Length && keep.Count < n; i++)
             {
-                MetaValue n = chain[i];
-                GUILayout.BeginVertical(GUI.skin.box);
-                if (GUILayout.Button(Clip(NodeSummary(n), 110), ReferenceEquals(n, _selected) ? ClipRows.Selected : ClipRows.Row))
+                string t = parts[i].Trim();
+                if (t.Length == 0 || t.StartsWith("--", StringComparison.Ordinal)) continue;
+                keep.Add(t);
+            }
+            return string.Join("\n", keep.ToArray());
+        }
+
+        /// <summary>Title, body and condition shown in a graph box.</summary>
+        string[] DescribeBox(MetaValue o, DlgGraphView.BoxKind kind)
+        {
+            string cond = kind == DlgGraphView.BoxKind.Folder ? null : ConditionText(o, true);
+            if (cond != null) cond = "if " + cond;
+            if (kind == DlgGraphView.BoxKind.Folder)
+            {
+                ulong fn = DlgDocument.NameHash(o);
+                string nm = fn != 0 ? Lookup(fn) : null;
+                return new[] { "Folder" + (nm != null ? ": " + nm : ""), "", null };
+            }
+            if (kind == DlgGraphView.BoxKind.Branch)
+            {
+                DlgDocument.ChildInfo ci = _doc.ChildInfoOf(o);
+                int index = ci != null ? ci.Set.Children.IndexOf(o) + 1 : 0;
+                string label;
+                if (ci == null || _doc.FolderOfChild(o) != null) label = "Entry";
+                else
                 {
-                    _selected = n;
-                    _inspScroll = Vector2.zero;
-                    GuiUtil.ResetBuffers();
-                }
-                // Branches of this node open their own chains.
-                List<DlgDocument.ChildSetInfo> sets = DlgDocument.ChildSets(n);
-                for (int s = 0; s < sets.Count; s++)
-                {
-                    if (sets[s].Children.Count == 0) continue;
-                    GUILayout.Label("  " + sets[s].Label + ":", GuiUtil.Note);
-                    for (int c = 0; c < sets[s].Children.Count; c++)
+                    switch (ci.Set.FieldName)
                     {
-                        MetaValue ch = sets[s].Children[c];
-                        if (GUILayout.Button("    " + (c + 1) + ". " + Clip(ChildSummary(ch), 90) + "  >", ClipRows.Row))
-                            ShowBranch(ch, true);
+                        case "mChoices": label = "Choice " + index; break;
+                        case "mPreChoice": label = "Before the choices"; break;
+                        case "mPostChoice": label = "After a choice"; break;
+                        case "mCases": label = cond == null ? "Case " + index + ": otherwise" : "Case " + index; break;
+                        case "mElements": label = "Element " + index; break;
+                        case "mPElements": label = "Parallel " + index; break;
+                        default: label = ci.Set.Label + " " + index; break;
                     }
                 }
-                if (n.Type == "DlgNodeJump")
-                {
-                    List<MetaValue> t = _doc.ByName(n["mJumpToName"] != null ? n["mJumpToName"].Bits : 0);
-                    MetaValue dlg = n["mhJumpToDlg"];
-                    bool external = dlg != null && dlg.Bits != 0;
-                    if (!external && t.Count > 0 && GUILayout.Button("    Go to jump target  >", ClipRows.Row))
-                    {
-                        MetaValue target = t[0];
-                        if (_doc.ChildInfoOf(target) != null) ShowBranch(target, true);
-                        else ShowNode(target);
-                    }
-                }
-                GUILayout.EndVertical();
+                ulong nmh = DlgDocument.NameHash(o);
+                string nm = nmh != 0 ? Lookup(nmh) : null;
+                if (nm != null) label += "  (" + nm + ")";
+                uint tid = DlgDocument.ChoiceTextId(o);
+                string body = "";
+                if (tid != 0) { string sp; body = "\"" + BoxLine(tid, out sp) + "\""; }
+                return new[] { label, body, cond };
             }
-            if (chain.Count > 0)
+
+            string kindName = DlgDocument.Kind(o);
+            switch (o.Type)
             {
-                ulong end = DlgDocument.LinkId(DlgDocument.NextLink(chain[chain.Count - 1]));
-                if (end != DlgDocument.NoneId) GUILayout.Label("The chain continues to a node that is missing or already shown (loop).", GuiUtil.Warning);
+                case "DlgNodeExchange":
+                case "DlgNodeText":
+                    {
+                        List<uint> ids = DlgDocument.LineIds(o);
+                        if (ids.Count > 0)
+                        {
+                            string sp;
+                            string line = BoxLine(ids[0], out sp);
+                            string more = ids.Count > 1 ? "\n(+" + (ids.Count - 1) + " more line" + (ids.Count > 2 ? "s" : "") + ")" : "";
+                            string title = string.IsNullOrEmpty(sp) ? kindName : sp;
+                            return new[] { title, line + more, cond };
+                        }
+                        string ch = ChoreText(o["mhChore"]);
+                        return new[] { kindName + (ch != null ? " - chore" : ""), ch ?? "(no line, no chore)", cond };
+                    }
+                case "DlgNodeScript":
+                    {
+                        string lua = o["mScriptText"] != null ? FirstLines(o["mScriptText"].Text, 3) : "";
+                        return new[] { "Lua script", lua.Length > 0 ? lua : "(empty)", cond };
+                    }
+                case "DlgNodeLogic":
+                    {
+                        MetaValue r = o["mRule"];
+                        string c = RuleText(r);
+                        string a = r != null && r.Kind != MetaKind.Raw ? GroupText(r["mActions"], true) : null;
+                        string body = (c != null ? "if " + c : "") + (a != null ? (c != null ? "\nthen " : "") + a : "");
+                        return new[] { "Logic", body.Length > 0 ? body : "(empty rule)", cond };
+                    }
+                case "DlgNodeJump":
+                    {
+                        MetaValue dlg = o["mhJumpToDlg"];
+                        bool other = dlg != null && dlg.Bits != 0;
+                        return new[] { other ? "Jump to another dialogue" : "Jump", "to " + JumpTargetText(o), cond };
+                    }
+                case "DlgNodeIdle": return new[] { "Idle", ChoreText(o["mhIdle"]) ?? "(no idle chore)", cond };
+                case "DlgNodeChore": return new[] { "Chore", ChoreText(o["mChore"]) ?? "(no chore)", cond };
+                case "DlgNodeNotes": return new[] { "Note", o["mNoteText"] != null ? FirstLines(o["mNoteText"].Text, 3) : "", cond };
+                case "DlgNodeWait": return new[] { "Wait", "", cond ?? "until its conditions are met" };
+                case "DlgNodeChoices":
+                    {
+                        List<DlgDocument.ChildSetInfo> sets = DlgDocument.ChildSets(o);
+                        int n = sets.Count > 0 ? sets[0].Children.Count : 0;
+                        return new[] { "Choices", n + " choice" + (n == 1 ? "" : "s") + " for the player", cond };
+                    }
+                case "DlgNodeConditional":
+                    {
+                        List<DlgDocument.ChildSetInfo> sets = DlgDocument.ChildSets(o);
+                        int n = sets.Count > 0 ? sets[0].Children.Count : 0;
+                        return new[] { "Conditional", "first case whose condition holds (" + n + " cases)", cond };
+                    }
+                case "DlgNodeSequence": return new[] { "Sequence", "plays one element each time", cond };
+                case "DlgNodeParallel": return new[] { "Parallel", "plays its elements together", cond };
+                case "DlgNodeStart": return new[] { "Start", NodeName(o), cond };
+                case "DlgNodeMarker": return new[] { "Marker", NodeName(o), cond };
+                case "DlgNodeExit": return new[] { "Exit", "the dialogue ends here", cond };
+                case "DlgNodeCancelChoices": return new[] { "Cancel choices", "", cond };
+                default: return new[] { kindName, "", cond };
             }
-            GUILayout.EndScrollView();
+        }
+
+        /// <summary>A Start/Marker node's name when known; otherwise whether jumps lead here.</summary>
+        string NodeName(MetaValue o)
+        {
+            ulong h = DlgDocument.NameHash(o);
+            if (h == 0) return "";
+            string n = Lookup(h);
+            if (n != null) return n;
+            int jumps = 0;
+            for (int i = 0; i < _doc.Nodes.Count; i++)
+            {
+                MetaValue j = _doc.Nodes[i];
+                if (j.Type == "DlgNodeJump" && j["mJumpToName"] != null && j["mJumpToName"].Bits == h) jumps++;
+            }
+            return jumps > 0 ? "jump target (" + jumps + " jump" + (jumps == 1 ? "" : "s") + " lead here)" : "";
+        }
+
+        static Color BoxColor(MetaValue o)
+        {
+            switch (o.Type)
+            {
+                case "DlgNodeExchange":
+                case "DlgNodeText": return new Color(0.25f, 0.45f, 0.75f);
+                case "DlgNodeChoices": return new Color(0.55f, 0.35f, 0.75f);
+                case "DlgChoice": return new Color(0.45f, 0.3f, 0.62f);
+                case "DlgNodeConditional": return new Color(0.8f, 0.5f, 0.15f);
+                case "DlgConditionalCase": return new Color(0.65f, 0.42f, 0.15f);
+                case "DlgNodeLogic": return new Color(0.15f, 0.55f, 0.5f);
+                case "DlgNodeScript": return new Color(0.35f, 0.5f, 0.25f);
+                case "DlgNodeJump": return new Color(0.75f, 0.25f, 0.25f);
+                case "DlgNodeStart": return new Color(0.2f, 0.6f, 0.3f);
+                case "DlgNodeExit": return new Color(0.5f, 0.15f, 0.15f);
+                case "DlgNodeChore":
+                case "DlgNodeIdle": return new Color(0.5f, 0.3f, 0.55f);
+                case "DlgNodeWait": return new Color(0.45f, 0.45f, 0.45f);
+                case "DlgNodeSequence":
+                case "DlgNodeParallel": return new Color(0.6f, 0.55f, 0.2f);
+                case "DlgFolder": return new Color(0.3f, 0.35f, 0.4f);
+                default: return new Color(0.4f, 0.4f, 0.45f);
+            }
+        }
+
+        string FindDialoguePath(ulong hash)
+        {
+            string dir = Dir(_doc.File.SourcePath);
+            if (dir == null) return null;
+            try
+            {
+                foreach (string f in Directory.GetFiles(dir, "*.dlog"))
+                    if (HashDatabase.Crc64(Path.GetFileName(f)) == hash) return f;
+            }
+            catch { }
+            return null;
+        }
+
+        void OpenOtherDialogue(ulong hash)
+        {
+            string p = FindDialoguePath(hash);
+            if (p == null) { SetStatus(HashText(hash) + " is not in this dialogue's folder.", true); return; }
+            _ctx.RunDeferred(() => LoadFile(p));
         }
 
         // ================================================================ inspector
@@ -932,7 +1107,7 @@ namespace TFM.App
             GUILayout.BeginHorizontal();
             GUILayout.Label("First node: " + (first == DlgDocument.NoneId ? "(none)" : _doc.NodeById(first) != null ? Clip(NodeSummary(_doc.NodeById(first)), 70) : "missing"), GuiUtil.Wrap);
             if (GUILayout.Button("Change...", GuiUtil.W(80)))
-                PickNode("Choose the first node of this branch", null, id => { string r = _doc.SetChildLink(c, id); _doc.Reindex(); _chainStart = DlgDocument.LinkId(DlgDocument.ChildLink(c)); MarkDirty("Branch relinked (" + r + ")."); });
+                PickNode("Choose the first node of this branch", null, id => { string r = _doc.SetChildLink(c, id); _doc.Reindex(); MarkDirty("Branch relinked (" + r + ")."); });
             GUILayout.EndHorizontal();
 
             if (DlgDocument.ConditionSet(c) != null) DrawConditionSet(c, "The branch is available only when these conditions are met");
@@ -1056,7 +1231,8 @@ namespace TFM.App
             GUILayout.EndHorizontal();
             string tx = _lang.Text(id) ?? "";
             string ntx = GUILayout.TextArea(tx, GUILayout.ExpandWidth(true));
-            if (ntx != tx) { _lang.SetText(id, ntx); SetStatus("Line text changed in the language file. Save to write it.", false); }
+            if (ntx != tx) { _lang.SetText(id, ntx); _graph.Invalidate(); SetStatus("Line text changed in the language file. Save to write it.", false); }
+            GUILayout.Label("Subtitle: " + Subtitle(ntx), GuiUtil.Note);
             GUILayout.EndVertical();
         }
 
@@ -1068,6 +1244,8 @@ namespace TFM.App
             DrawEnum(n["mVisibilityBehavior"], "Visibility", new[] { "", "Ignore", "Obey" });
             GUILayout.BeginHorizontal();
             GUILayout.Label("Target: " + JumpTargetText(n), GuiUtil.Wrap);
+            MetaValue jt = n["mJumpToName"] != null && (n["mhJumpToDlg"] == null || n["mhJumpToDlg"].Bits == 0) ? FirstByName(n["mJumpToName"].Bits) : null;
+            if (jt != null && GUILayout.Button("Go to target", GuiUtil.W(100))) ShowNode(jt);
             if (GUILayout.Button("Change...", GuiUtil.W(80)))
             {
                 // Targets are named objects in this dialogue.
@@ -1092,8 +1270,15 @@ namespace TFM.App
                 if (GUILayout.Button("Choose .dlog...", GuiUtil.W(110)))
                     _picker.Open("Dialogue to jump into", ".dlog", dlg.Bits, (h, nn) => { dlg.Bits = h; MarkDirty("Jump now goes to " + nn + "."); });
                 if (dlg.Bits != 0 && GUILayout.Button("This dialogue", GuiUtil.W(100))) { dlg.Bits = 0; MarkDirty(null); }
+                if (dlg.Bits != 0 && GUILayout.Button("Open it", GuiUtil.W(70))) OpenOtherDialogue(dlg.Bits);
                 GUILayout.EndHorizontal();
             }
+        }
+
+        MetaValue FirstByName(ulong h)
+        {
+            List<MetaValue> t = _doc.ByName(h);
+            return t.Count > 0 ? t[0] : null;
         }
 
         void PickNode(string title, MetaValue exclude, Action<ulong> onPick)
@@ -1291,6 +1476,24 @@ namespace TFM.App
                     bool unknown = Lookup(key) == null;
                     GUILayout.Label(KeyName(key), unknown ? GuiUtil.Warning : GuiUtil.Wrap, GuiUtil.MinW(160));
                     if (unknown && GUILayout.Button("Name...", GuiUtil.W(64))) { _namingKey = _namingKey == key ? 0 : key; _namingText = ""; }
+                    if (GUILayout.Button("Copy", GuiUtil.W(48)))
+                    {
+                        GUIUtility.systemCopyBuffer = "0x" + key.ToString("X16");
+                        SetStatus("Copied key 0x" + key.ToString("X16") + (unknown ? "" : " (" + Lookup(key) + ")") + ".", false);
+                    }
+                    if (GUILayout.Button("Paste", GuiUtil.W(50)))
+                    {
+                        ulong nk;
+                        string why = ParseKey(GUIUtility.systemCopyBuffer, out nk);
+                        if (why != null) SetStatus(why, true);
+                        else if (nk != key)
+                        {
+                            ReplaceKey(item, key, nk);
+                            MarkDirty("Key replaced with " + KeyName(nk) + ".");
+                            GUILayout.EndHorizontal();
+                            return;
+                        }
+                    }
                     if (!actions)
                     {
                         MetaValue nv = MapGet(neg, key);
@@ -1347,7 +1550,9 @@ namespace TFM.App
             if (GUILayout.Button(actions ? "Add key to set" : "Add key to test", GuiUtil.W(120)))
             {
                 string name = kn.Trim();
-                ulong h = HashDatabase.Crc64(name);
+                ulong h = 0;
+                bool byHash = name.StartsWith("0x", StringComparison.OrdinalIgnoreCase) && HashDatabase.TryParseHex(name, out h);
+                if (!byHash) h = HashDatabase.Crc64(name);
                 MetaValue v;
                 switch (KeyTypes[kt])
                 {
@@ -1357,9 +1562,12 @@ namespace TFM.App
                     default: v = MetaValue.NewBool(true); break;
                 }
                 MetaProps.Set(ps, h, KeyTypes[kt], v);
-                _doc.RegisterName(name);
-                MetaValue refs = item["mReferenceKeyList"];
-                if (refs != null && refs.Kind == MetaKind.Array) refs.Items.Add(MetaValue.NewString(name));
+                if (!byHash)
+                {
+                    _doc.RegisterName(name);
+                    MetaValue refs = item["mReferenceKeyList"];
+                    if (refs != null && refs.Kind == MetaKind.Array) refs.Items.Add(MetaValue.NewString(name));
+                }
                 _newKeyName[item] = "";
                 MarkDirty("Key " + name + " added.");
             }
@@ -1521,6 +1729,38 @@ namespace TFM.App
         {
             for (int i = 0; i < _doc.Nodes.Count; i++)
                 foreach (uint id in DlgDocument.LineIds(_doc.Nodes[i])) yield return id;
+        }
+
+        /// <summary>Reads a key from pasted text: "0x..." (or 16 hex digits) is taken as the hash, anything else as a name.</summary>
+        static string ParseKey(string text, out ulong key)
+        {
+            key = 0;
+            string t = (text ?? "").Trim().Trim('"');
+            if (t.Length == 0) return "The clipboard is empty. Copy a key first.";
+            bool hex = t.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
+                       || (t.Length == 16 && System.Text.RegularExpressions.Regex.IsMatch(t, "^[0-9A-Fa-f]{16}$"));
+            if (hex) return HashDatabase.TryParseHex(t, out key) ? null : "The clipboard does not hold a valid hash: " + t;
+            string clean, why;
+            if (!CustomNameStore.Validate(t, out clean, out why)) return why;
+            key = HashDatabase.Crc64(clean);
+            return null;
+        }
+
+        /// <summary>Swaps a tested/set key for another, keeping its value, negation, comparison and action.</summary>
+        void ReplaceKey(MetaValue item, ulong oldKey, ulong newKey)
+        {
+            MetaValue ps = item["Baseclass_PropertySet"];
+            foreach (MetaValue g in MetaProps.Groups(ps))
+                for (int i = 0; i < g.Keys.Count; i++)
+                    if (g.Keys[i].Bits == oldKey) g.Keys[i].Bits = newKey;
+            string[] maps = { "mKeyNegateList", "mKeyComparisonList", "mKeyActionList" };
+            for (int m = 0; m < maps.Length; m++)
+            {
+                MetaValue map = item[maps[m]];
+                if (map == null || map.Kind != MetaKind.Map) continue;
+                for (int i = 0; i < map.Keys.Count; i++)
+                    if (map.Keys[i].Bits == oldKey) map.Keys[i].Bits = newKey;
+            }
         }
 
         static MetaValue MapGet(MetaValue map, ulong key)
