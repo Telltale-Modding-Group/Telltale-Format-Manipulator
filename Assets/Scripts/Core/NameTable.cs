@@ -50,6 +50,9 @@ namespace TFM.Core
 
         public bool TryGetName(ulong hash, out string name) { return byHash.TryGetValue(hash, out name); }
 
+        /// <summary>Every hash and name in the table.</summary>
+        public IEnumerable<KeyValuePair<ulong, string>> Pairs { get { return byHash; } }
+
         /// <summary>Builds a table from already-resolved pairs, e.g. names merged from several dumps.</summary>
         public static NameTable FromDictionary(Dictionary<ulong, string> map, string label)
         {
@@ -100,13 +103,50 @@ namespace TFM.Core
     {
         public NameTable TypeNames = NameTable.Empty;
         public NameTable KeyNames = NameTable.Empty;
+        /// <summary>Built-in and custom file names merged; what every lookup and picker uses.</summary>
         public NameTable FileNames = NameTable.Empty;
 
-        /// <summary>Populated from the .bin name dumps; keyed by CRC64 of the full file name.</summary>
-        public void AddFileNames(NameTable table)
+        NameTable builtInFiles = NameTable.Empty;
+        Dictionary<ulong, string> customFiles = new Dictionary<ulong, string>();
+
+        /// <summary>Names from the tool's own dumps; keyed by CRC64 of the full file name.</summary>
+        public void SetBuiltInFileNames(NameTable table)
         {
-            if (table == null || table.Count == 0) return;
-            FileNames = table;
+            builtInFiles = table ?? NameTable.Empty;
+            Rebuild();
+        }
+
+        /// <summary>Names from the CustomNames folder, replacing any set before.</summary>
+        public void SetCustomFileNames(Dictionary<ulong, string> names)
+        {
+            customFiles = names ?? new Dictionary<ulong, string>();
+            Rebuild();
+        }
+
+        /// <summary>Adds one custom name without re-reading the folder.</summary>
+        public void AddCustomFileName(ulong hash, string name)
+        {
+            if (string.IsNullOrEmpty(name) || customFiles.ContainsKey(hash)) return;
+            customFiles[hash] = name;
+            Rebuild();
+        }
+
+        public int BuiltInFileCount { get { return builtInFiles.Count; } }
+        public int CustomFileCount { get { return customFiles.Count; } }
+
+        /// <summary>True when the name comes only from the CustomNames folder.</summary>
+        public bool IsCustomOnly(ulong hash)
+        {
+            return customFiles.ContainsKey(hash) && builtInFiles.NameOf(hash) == null;
+        }
+
+        void Rebuild()
+        {
+            if (customFiles.Count == 0) { FileNames = builtInFiles; return; }
+            Dictionary<ulong, string> all = new Dictionary<ulong, string>(customFiles);
+            // Built-in names win on a shared hash: they are spelled as in the game's archives.
+            foreach (KeyValuePair<ulong, string> kv in builtInFiles.Pairs) all[kv.Key] = kv.Value;
+            FileNames = NameTable.FromDictionary(all, "file names");
         }
 
         public string Type(ulong hash) { return TypeNames.NameOf(hash); }

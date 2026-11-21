@@ -37,6 +37,18 @@ namespace TFM.App
         /// <summary>Type, property-key and file-reference names shown by the props editor.</summary>
         public PropNameLookup PropNames { get; set; }
 
+        /// <summary>The CustomNames folder: user-added file names, merged into PropNames.</summary>
+        public CustomNameStore CustomNames { get; set; }
+
+        /// <summary>Re-reads the CustomNames folder into PropNames. Returns how many names it holds.</summary>
+        public int ReloadCustomNames()
+        {
+            if (CustomNames == null) return 0;
+            System.Collections.Generic.Dictionary<ulong, string> names = CustomNames.Load();
+            PropNames.SetCustomFileNames(names);
+            return names.Count;
+        }
+
         /// <summary>Full window rect in GUI coordinates (after UI scaling). Use it to place popups.</summary>
         public Rect ScreenRect { get; set; }
 

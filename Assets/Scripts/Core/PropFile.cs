@@ -20,7 +20,11 @@ namespace TFM.Core
         Vec3,
         Symbol,
         Text,
-        Blob8
+        Blob8,
+        /// <summary>Two floats, e.g. T3MaterialEnlightenPrecomputeParams (reflectivity, transparency).</summary>
+        Vec2,
+        /// <summary>Compiled material data (T3MaterialData); decoded by <see cref="PropMaterial"/>.</summary>
+        Material
     }
 
     /// <summary>
@@ -266,6 +270,7 @@ namespace TFM.Core
         public const ulong TypeProp8A = 0x73E09E0F84717F0AUL;
         public const ulong TypeProp8B = 0x1B3355ECACF8ED7CUL;
         public const ulong TypeProp8C = 0x823DB9F90B846250UL;
+        public const ulong TypeEnlightenParams = 0xCFD0EBF69D907EEDUL; // T3MaterialEnlightenPrecomputeParams
 
         static readonly Dictionary<ulong, PropKind> Kinds = new Dictionary<ulong, PropKind>();
         static readonly Dictionary<ulong, string> Names = new Dictionary<ulong, string>();
@@ -281,6 +286,8 @@ namespace TFM.Core
             Add(TypeProp8A, PropKind.Blob8, "prop8:73e09e0f");
             Add(TypeProp8B, PropKind.Blob8, "prop8:1b3355ec");
             Add(TypeProp8C, PropKind.Blob8, "prop8:823db9f9");
+            Add(PropMaterial.TypeHash, PropKind.Material, "T3MaterialData");
+            Add(TypeEnlightenParams, PropKind.Vec2, "T3MaterialEnlightenPrecomputeParams");
         }
 
         static void Add(ulong hash, PropKind kind, string name)
@@ -307,6 +314,7 @@ namespace TFM.Core
                 case PropKind.Float: return 4;
                 case PropKind.Color: return 16;
                 case PropKind.Vec3: return 12;
+                case PropKind.Vec2: return 8;
                 case PropKind.Symbol: return 8;
                 case PropKind.Blob8:
                     // Blob8 doubles as "known layout, edited as bytes": the real size comes from
@@ -372,6 +380,32 @@ namespace TFM.Core
         public int OriginalSize { get { return original.Length; } }
         public IReadOnlyList<ulong> HeaderTable { get { return headerTable; } }
 
+        /// <summary>Version word stored next to each header type, in the same order as HeaderTable.</summary>
+        public IReadOnlyList<uint> HeaderVersions { get { return headerVersions; } }
+
+        public bool HasHeaderType(ulong typeHash) { return headerTable.Contains(typeHash); }
+
+        /// <summary>The version word stored for a header type, or false when the type is not listed.</summary>
+        public bool TryGetHeaderVersion(ulong typeHash, out uint version)
+        {
+            int i = headerTable.IndexOf(typeHash);
+            version = i >= 0 ? headerVersions[i] : 0u;
+            return i >= 0;
+        }
+
+        /// <summary>
+        /// Appends a type to the header table when it is missing. The game reads the table to learn
+        /// which serialized type versions the file uses, so data moved in from another file needs
+        /// its types listed. Returns true when the entry was added.
+        /// </summary>
+        public bool AddHeaderType(ulong typeHash, uint version)
+        {
+            if (headerTable.Contains(typeHash)) return false;
+            headerTable.Add(typeHash);
+            headerVersions.Add(version);
+            return true;
+        }
+
         /// <summary>Byte length of the leading key block that precedes the property count.</summary>
         public int PrologueLength { get { return prologue.Length; } }
 
@@ -389,6 +423,7 @@ namespace TFM.Core
         readonly List<PropField> fields = new List<PropField>();
         readonly List<PropOpaque> opaqueView = new List<PropOpaque>();
         List<ulong> headerTable = new List<ulong>();
+        List<uint> headerVersions = new List<uint>();
 
         int headerEnd;      // H: first byte after the platform/type table
         int sizeOffset;     // field at 0x04, equals file length - H
@@ -435,7 +470,10 @@ namespace TFM.Core
                 throw new PropParseException("Header runs past the end of the file.");
 
             for (int i = 0; i < tableCount; i++)
+            {
                 f.headerTable.Add(ReadU64(data, 0x14 + i * 12));
+                f.headerVersions.Add(ReadU32(data, 0x14 + i * 12 + 8));
+            }
 
             f.sizeOffset = 0x04;
             f.blockSizeOffset = f.headerEnd + 8;
@@ -636,6 +674,12 @@ namespace TFM.Core
                     if (len > 1 << 20 || p + len > end) { why = "string length " + len + " runs past the payload"; return false; }
                     n = (int)len;
                 }
+                else if (kind == PropKind.Material)
+                {
+                    int body = PropMaterial.Measure(d, p, end, out why);
+                    if (body < 0) return false;
+                    n = body;
+                }
                 else if (layout == PropLayoutKind.Array || layout == PropLayoutKind.TextArray
                          || layout == PropLayoutKind.Map)
                 {
@@ -795,16 +839,26 @@ namespace TFM.Core
             int payloadLen = prologue.Length + 4 + opaqueBytes;
             for (int i = 0; i < fields.Count; i++) payloadLen += fields[i].ByteLength;
 
-            int total = headerEnd + 16 + payloadLen;
+            // The header is rebuilt from the type table, so types added by a transplant are
+            // written; an untouched table reproduces the original bytes.
+            int newHeaderEnd = 0x14 + headerTable.Count * 12;
+            int total = newHeaderEnd + 16 + payloadLen;
             byte[] o = new byte[total];
 
-            Buffer.BlockCopy(original, 0, o, 0, headerEnd + 16);
+            Buffer.BlockCopy(original, 0, o, 0, 0x10);
+            Put32(o, 0x10, (uint)headerTable.Count);
+            for (int i = 0; i < headerTable.Count; i++)
+            {
+                PropField.PutU64(o, 0x14 + i * 12, headerTable[i]);
+                Put32(o, 0x14 + i * 12 + 8, headerVersions[i]);
+            }
+            Buffer.BlockCopy(original, headerEnd, o, newHeaderEnd, 16);
 
-            Put32(o, sizeOffset, (uint)(total - headerEnd));
+            Put32(o, sizeOffset, (uint)(total - newHeaderEnd));
             // The block field covers itself and the prologue-key count, so it is payload + 8.
-            Put32(o, blockSizeOffset, (uint)(payloadLen + 8));
+            Put32(o, newHeaderEnd + 8, (uint)(payloadLen + 8));
 
-            int p = payloadStart;
+            int p = newHeaderEnd + 16;
             if (prologue.Length > 0) Buffer.BlockCopy(prologue, 0, o, p, prologue.Length);
             p += prologue.Length;
 
@@ -857,6 +911,8 @@ namespace TFM.Core
                 return "item count " + check.items.Count + " != " + items.Count;
             if (check.fields.Count != fields.Count)
                 return "property count " + check.fields.Count + " != " + fields.Count;
+            if (check.headerTable.Count != headerTable.Count)
+                return "header type count " + check.headerTable.Count + " != " + headerTable.Count;
             if (check.RawTailLength != RawTailLength)
                 return "opaque byte count changed (" + RawTailLength + " -> " + check.RawTailLength + ")";
 
@@ -880,6 +936,7 @@ namespace TFM.Core
             items.Clear();
             items.AddRange(fresh.items);
             headerTable = fresh.headerTable;
+            headerVersions = fresh.headerVersions;
             headerEnd = fresh.headerEnd;
             sizeOffset = fresh.sizeOffset;
             blockSizeOffset = fresh.blockSizeOffset;
