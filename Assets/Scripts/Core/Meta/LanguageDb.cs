@@ -45,6 +45,18 @@ namespace TFM.Core.Meta
 
         public bool Has(uint id) { return _byId.ContainsKey(id); }
 
+        /// <summary>Every line's speaker and text (for word lists and searches).</summary>
+        public IEnumerable<string> AllText()
+        {
+            foreach (MetaValue res in _byId.Values)
+            {
+                MetaValue l = Local(res);
+                if (l == null) continue;
+                if (l["mPrefix"] != null) yield return l["mPrefix"].Text;
+                if (l["mText"] != null) yield return l["mText"].Text;
+            }
+        }
+
         public MetaValue Line(uint id)
         {
             MetaValue v;

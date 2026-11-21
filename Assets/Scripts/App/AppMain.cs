@@ -27,6 +27,9 @@ namespace TFM.App
         [Tooltip("Assets/Data/MetaLayouts.bytes - MetaStream class layouts used to read .chore and .dlog files.")]
         public TextAsset metaLayouts;
 
+        [Tooltip("Assets/Data/LogicNames.bytes - strings from the game's Lua scripts, used to name hashed logic and property keys.")]
+        public TextAsset logicNames;
+
         [Tooltip("Folder of archive name dumps (Dump Binary output). Read at startup to resolve "
                  + "mesh, texture and chore references in .prop files. Relative to the data folder.")]
         public string nameDumpFolder = "Resources/Names";
@@ -94,6 +97,7 @@ namespace TFM.App
             if (propTypeLayouts != null)
                 PropLayouts.Load(propTypeLayouts.bytes);
             LoadMetaLayouts();
+            LoadLogicNames();
 
             // Archive name dumps are read straight off disk at startup: there are hundreds of
             // them, and they change whenever more archives are dumped.
@@ -105,6 +109,15 @@ namespace TFM.App
                     _status = "No archive name dumps found, so file references will show as hashes."
                               + " Looked in: " + string.Join("; ", NameDumpRoots(nameDumpFolder));
             }
+        }
+
+        void LoadLogicNames()
+        {
+            TextAsset asset = logicNames;
+#if UNITY_EDITOR
+            if (asset == null) asset = UnityEditor.AssetDatabase.LoadAssetAtPath<TextAsset>("Assets/Data/LogicNames.bytes");
+#endif
+            if (asset != null) _ctx.PropNames.LogicNames = NameTable.Load(asset.bytes, "TFMLOGIC", "logic names");
         }
 
         void LoadMetaLayouts()

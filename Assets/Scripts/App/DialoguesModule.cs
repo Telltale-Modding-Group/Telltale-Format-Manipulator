@@ -160,8 +160,15 @@ namespace TFM.App
                     b.Append(Clip(n["mNoteText"] != null ? n["mNoteText"].Text : "", 90));
                     break;
                 case "DlgNodeLogic":
-                    b.Append(RuleSummary(n["mRule"]));
-                    break;
+                    {
+                        MetaValue r = n["mRule"];
+                        string cond = RuleText(r);
+                        string act = r != null && r.Kind != MetaKind.Raw ? GroupText(r["mActions"], true) : null;
+                        if (cond != null) b.Append("if ").Append(Clip(cond, 60)).Append(' ');
+                        if (act != null) b.Append(cond != null ? "then " : "").Append(Clip(act, 60));
+                        if (cond == null && act == null) b.Append(RuleSummary(r));
+                        break;
+                    }
                 default:
                     {
                         List<DlgDocument.ChildSetInfo> sets = DlgDocument.ChildSets(n);
@@ -171,8 +178,8 @@ namespace TFM.App
                         break;
                     }
             }
-            MetaValue vis = DlgDocument.VisibilityConditions(n);
-            if (vis != null && HasVisibilityTest(vis)) b.Append("   {conditional}");
+            string ct = ConditionText(n);
+            if (ct != null) b.Append("   {if ").Append(Clip(ct, 70)).Append('}');
             return b.ToString();
         }
 
@@ -198,10 +205,9 @@ namespace TFM.App
                 else b.Append("(empty branch)");
                 if (chain.Count > 1) b.Append("  (" + chain.Count + " nodes)");
             }
-            MetaValue cs = DlgDocument.ConditionSet(c);
-            int nc = cs != null ? cs["#items"].Items.Count : 0;
-            MetaValue vis = DlgDocument.VisibilityConditions(c);
-            if (nc > 0 || (vis != null && HasVisibilityTest(vis))) b.Append("   {" + (nc > 0 ? nc + " condition(s)" : "conditional") + "}");
+            string ct = ConditionText(c);
+            if (ct != null) b.Insert(0, "{if " + Clip(ct, 70) + "}  ");
+            else if (c.Type == "DlgConditionalCase") b.Insert(0, "{otherwise}  ");
             return b.ToString();
         }
 
@@ -228,6 +234,79 @@ namespace TFM.App
         }
 
         static string ShortId(ulong id) { return "#" + (id & 0xFFFFFF).ToString("X6"); }
+
+        static readonly string[] OpText = { "==", "<", ">", "<=", ">=" };
+        static readonly string[] ActText = { "=", "+=", "-=" };
+
+        string KeyName(ulong h)
+        {
+            string n = Lookup(h);
+            return n ?? "unknown key 0x" + h.ToString("X16");
+        }
+
+        /// <summary>A rule group as an expression: "Drugstore - KennyHit == true and ...".</summary>
+        string GroupText(MetaValue grp, bool actions)
+        {
+            MetaValue items = grp != null ? grp["mItems"] : null;
+            if (items == null || items.Kind != MetaKind.Map || items.Items.Count == 0) return null;
+            List<string> parts = new List<string>();
+            for (int i = 0; i < items.Items.Count; i++)
+            {
+                MetaValue item = items.Items[i];
+                MetaValue ps = item["Baseclass_PropertySet"];
+                foreach (MetaValue g in MetaProps.Groups(ps))
+                    for (int k = 0; k < g.Items.Count; k++)
+                    {
+                        ulong key = g.Keys[k].Bits;
+                        string v = g.Items[k].Kind == MetaKind.String ? "\"" + g.Items[k].Text + "\"" : g.Items[k].Summary();
+                        if (actions)
+                        {
+                            MetaValue a = MapGet(item["mKeyActionList"], key);
+                            int ai = a != null ? a.AsInt : 0;
+                            parts.Add(KeyName(key) + " " + (ai >= 0 && ai < ActText.Length ? ActText[ai] : "?") + " " + v);
+                        }
+                        else
+                        {
+                            MetaValue c = MapGet(item["mKeyComparisonList"], key);
+                            MetaValue ng = MapGet(item["mKeyNegateList"], key);
+                            int ci = c != null ? c.AsInt : 0;
+                            parts.Add((ng != null && ng.AsBool ? "not " : "") + KeyName(key) + " " + (ci >= 0 && ci < OpText.Length ? OpText[ci] : "?") + " " + v);
+                        }
+                    }
+            }
+            if (parts.Count == 0) return null;
+            MetaValue op = grp["mOperator"];
+            return string.Join(op != null && op.AsInt == 2 ? " or " : " and ", parts.ToArray());
+        }
+
+        string RuleText(MetaValue rule)
+        {
+            if (rule == null || rule.Kind == MetaKind.Raw) return null;
+            return GroupText(rule["mConditions"], false);
+        }
+
+        /// <summary>The test that decides whether a node or branch is used, as one line, or null.</summary>
+        string ConditionText(MetaValue o)
+        {
+            List<string> parts = new List<string>();
+            MetaValue vis = DlgDocument.VisibilityConditions(o);
+            if (vis != null)
+            {
+                MetaValue sc = vis["mScriptVisCond"];
+                if (sc != null && sc.Bytes != null && sc.Bytes.Length > 0) parts.Add(sc.Text.Trim());
+                string rt = RuleText(vis["#rule"]);
+                if (!string.IsNullOrEmpty(rt)) parts.Add(rt);
+            }
+            MetaValue cs = DlgDocument.ConditionSet(o);
+            if (cs != null)
+                foreach (MetaValue c in cs["#items"].Items)
+                {
+                    if (c.Type == "DlgConditionRule") { string rt = RuleText(c["mRule"]); if (!string.IsNullOrEmpty(rt)) parts.Add(rt); }
+                    else if (c.Type == "DlgConditionTime") parts.Add("after " + (c["mSeconds"] != null ? c["mSeconds"].Summary() : "?") + " s");
+                    else if (c.Type == "DlgConditionInput") parts.Add("on input");
+                }
+            return parts.Count == 0 ? null : string.Join("; ", parts.ToArray());
+        }
 
         static string RuleSummary(MetaValue rule)
         {
@@ -300,6 +379,11 @@ namespace TFM.App
             if (GUILayout.Button("Language file...", GuiUtil.W(120))) BrowseLanguage();
             if (GUILayout.Button("Language folder...", GuiUtil.W(130))) BrowseFolder(true);
             if (GUILayout.Button("Chore folder...", GuiUtil.W(110))) BrowseFolder(false);
+            GUI.enabled = _doc != null;
+            if (GUILayout.Button("Guess key names", GuiUtil.W(130))) _ctx.RunDeferred(GuessKeyNames);
+            GUI.enabled = true;
+            if (GUILayout.Button("Import names...", GuiUtil.W(120))) BrowseImportNames();
+            GUI.enabled = true;
             GUILayout.Label(_lang != null ? "Language: " + Path.GetFileName(_lang.Path) + " (" + _lang.Count + " lines)" + (_lang.Dirty ? " *" : "")
                 : "Language: none", _lang != null ? GuiUtil.Note : GuiUtil.Warning, GUILayout.ExpandWidth(true));
             GUILayout.Label("Chores: " + (string.IsNullOrEmpty(_choreFolder) ? "dialogue folder" : _choreFolder), GuiUtil.Note, GuiUtil.MaxW(360));
@@ -1138,6 +1222,8 @@ namespace TFM.App
         {
             MetaValue items = grp["mItems"];
             int n = items != null ? items.Items.Count : 0;
+            string expr = GroupText(grp, actions);
+            if (expr != null) GUILayout.Label(label + ":  " + expr, GuiUtil.Wrap);
             GUILayout.BeginHorizontal();
             GUILayout.Label(label + " - " + n + " item(s)", GuiUtil.SubHeader);
             MetaValue op = grp["mOperator"];
@@ -1202,7 +1288,9 @@ namespace TFM.App
                 {
                     ulong key = grp.Keys[i].Bits;
                     GUILayout.BeginHorizontal();
-                    GUILayout.Label(HashText(key), GuiUtil.Wrap, GuiUtil.MinW(160));
+                    bool unknown = Lookup(key) == null;
+                    GUILayout.Label(KeyName(key), unknown ? GuiUtil.Warning : GuiUtil.Wrap, GuiUtil.MinW(160));
+                    if (unknown && GUILayout.Button("Name...", GuiUtil.W(64))) { _namingKey = _namingKey == key ? 0 : key; _namingText = ""; }
                     if (!actions)
                     {
                         MetaValue nv = MapGet(neg, key);
@@ -1228,7 +1316,11 @@ namespace TFM.App
                         }
                     }
                     if (_tree.DrawLeaf(grp.Items[i])) MarkDirty(null);
-                    if (GUILayout.Button("x", GuiUtil.W(24)))
+                    bool remove = GUILayout.Button("x", GuiUtil.W(24));
+                    GUILayout.EndHorizontal();
+                    if (_namingKey == key) DrawKeyNamer(key);
+                    GUILayout.BeginHorizontal();
+                    if (remove)
                     {
                         MetaProps.Remove(ps, key);
                         MapRemove(neg, key);
@@ -1273,6 +1365,162 @@ namespace TFM.App
             }
             GUI.enabled = true;
             GUILayout.EndHorizontal();
+        }
+
+        ulong _namingKey;
+        string _namingText = "";
+
+        /// <summary>Names an unknown key. Only a name whose hash matches is accepted; it is saved to CustomNames.</summary>
+        void DrawKeyNamer(ulong key)
+        {
+            GUILayout.BeginVertical(GUI.skin.box);
+            GUILayout.Label("The file stores only a hash of this key's name. Type the exact name (for example"
+                + " \"Drugstore - KennyHit\"); it is accepted only if its hash is 0x" + key.ToString("X16") + ".", GuiUtil.Wrap);
+            GUILayout.BeginHorizontal();
+            _namingText = GUILayout.TextField(_namingText ?? "", GuiUtil.MinW(240));
+            string clean, why;
+            bool valid = CustomNameStore.Validate(_namingText, out clean, out why);
+            bool match = valid && HashDatabase.Crc64(clean) == key;
+            GUI.enabled = match;
+            if (GUILayout.Button("Save name", GuiUtil.W(90)))
+            {
+                SaveName(key, clean);
+                _namingKey = 0;
+                SetStatus("Key named " + clean + " (saved to " + CustomNameStore.FolderName + ").", false);
+            }
+            GUI.enabled = true;
+            if (GUILayout.Button("Cancel", GuiUtil.W(60))) _namingKey = 0;
+            GUILayout.EndHorizontal();
+            if (valid && !match) GUILayout.Label("No match: that name hashes to 0x" + HashDatabase.Crc64(clean).ToString("X16") + ".", GuiUtil.Note);
+            GUILayout.EndVertical();
+        }
+
+        void SaveName(ulong hash, string name)
+        {
+            if (_doc != null) _doc.RegisterName(name);
+            if (_ctx.PropNames.FileRef(hash) != null || _ctx.CustomNames == null) return;
+            try
+            {
+                _ctx.CustomNames.Append(name);
+                _ctx.PropNames.AddCustomFileName(hash, name);
+            }
+            catch (Exception e) { SetStatus("Could not save the name to CustomNames: " + e.Message, true); }
+        }
+
+        /// <summary>
+        /// Searches names for the dialogue's unnamed rule keys with the "Area - Words" pattern.
+        /// Hits are exact hash matches and are saved to CustomNames.
+        /// </summary>
+        void GuessKeyNames()
+        {
+            if (_doc == null) return;
+            List<ulong> keys = LogicKeyGuesser.RuleKeys(_doc);
+            List<ulong> targets = new List<ulong>();
+            HashSet<string> areas = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Game" };
+            HashSet<string> words = new HashSet<string>(StringComparer.Ordinal);
+            for (int i = 0; i < LogicKeyGuesser.CommonWords.Length; i++) words.Add(LogicKeyGuesser.CommonWords[i]);
+            for (int i = 0; i < keys.Count; i++)
+            {
+                string n = Lookup(keys[i]);
+                if (n == null) { targets.Add(keys[i]); continue; }
+                string a = LogicKeyGuesser.AreaOf(n);
+                if (a != null) { areas.Add(a); LogicKeyGuesser.AddWords(words, n.Substring(a.Length + 3)); }
+            }
+            if (targets.Count == 0) { SetStatus("Every rule key in this dialogue already has a name.", false); return; }
+            // The dialogue's own name usually starts with its area ("drugstore_carley").
+            string stem = Path.GetFileNameWithoutExtension(_doc.File.SourcePath ?? "");
+            int us = stem.IndexOf('_');
+            string first = us > 0 ? stem.Substring(0, us) : stem;
+            if (first.Length > 1) areas.Add(char.ToUpperInvariant(first[0]) + first.Substring(1));
+            HashSet<string> subjects = new HashSet<string>(StringComparer.Ordinal);
+            _doc.Root.Walk(v => { if (v.Kind == MetaKind.String && v.Bytes != null && v.Bytes.Length < 300) LogicKeyGuesser.AddWords(words, v.Text); });
+            if (_lang != null)
+            {
+                foreach (string t in _lang.AllText()) LogicKeyGuesser.AddWords(words, t);
+                foreach (uint id in AllLineIds())
+                {
+                    string sp = _lang.Speaker(id);
+                    if (!string.IsNullOrEmpty(sp) && sp.Length < 20) subjects.Add(char.ToUpperInvariant(sp[0]) + sp.Substring(1).ToLowerInvariant());
+                }
+            }
+            // Very long vocabularies make the two-word search slow; keep the shorter words.
+            List<string> wl = new List<string>(words);
+            wl.Sort((x, y) => x.Length != y.Length ? x.Length.CompareTo(y.Length) : string.CompareOrdinal(x, y));
+            if (wl.Count > 2500) wl.RemoveRange(2500, wl.Count - 2500);
+            Dictionary<ulong, string> hits = LogicKeyGuesser.Guess(targets, areas, wl, subjects);
+            foreach (KeyValuePair<ulong, string> h in hits) SaveName(h.Key, h.Value);
+            List<string> names = new List<string>(hits.Values);
+            SetStatus("Key names found: " + hits.Count + " of " + targets.Count + " unnamed rule keys"
+                + (names.Count > 0 ? " (" + Clip(string.Join(", ", names.ToArray()), 160) + "), saved to " + CustomNameStore.FolderName : "")
+                + ". Areas tried: " + string.Join(", ", new List<string>(areas).ToArray()) + ".", false);
+        }
+
+        const string ImportFileName = "imported_strings.txt";
+
+        void BrowseImportNames()
+        {
+            if (!NativeFileDialog.IsSupported) { SetStatus("The folder dialog is only available in Windows builds.", true); return; }
+            _ctx.RunDeferred(() =>
+            {
+                string p = NativeFileDialog.OpenFolder("Folder with Lua scripts or text files to take names from", Dir(_path));
+                if (!string.IsNullOrEmpty(p)) ImportNames(p);
+            });
+        }
+
+        /// <summary>
+        /// Collects every quoted string from .lua and .txt files under a folder (decompiled scripts
+        /// keep their string constants) and saves the new ones to CustomNames/imported_strings.txt.
+        /// Logic, rule and property keys are hashes of such strings, so they resolve afterwards.
+        /// </summary>
+        public int ImportNames(string folder)
+        {
+            if (_ctx.CustomNames == null) { SetStatus("The CustomNames folder is not available.", true); return 0; }
+            List<string> files = new List<string>();
+            try
+            {
+                files.AddRange(Directory.GetFiles(folder, "*.lua", SearchOption.AllDirectories));
+                files.AddRange(Directory.GetFiles(folder, "*.txt", SearchOption.AllDirectories));
+            }
+            catch (Exception e) { SetStatus("Could not read " + folder + ": " + e.Message, true); return 0; }
+            System.Text.RegularExpressions.Regex q = new System.Text.RegularExpressions.Regex("\"((?:[^\"\\\\\\n]|\\\\.){2,120})\"|'((?:[^'\\\\\\n]|\\\\.){2,120})'");
+            HashSet<ulong> have = new HashSet<ulong>();
+            List<string> fresh = new List<string>();
+            for (int f = 0; f < files.Count; f++)
+            {
+                string text;
+                try { text = File.ReadAllText(files[f]); }
+                catch { continue; }
+                foreach (System.Text.RegularExpressions.Match m in q.Matches(text))
+                {
+                    string s = (m.Groups[1].Success ? m.Groups[1].Value : m.Groups[2].Value).Trim();
+                    string clean, why;
+                    if (!CustomNameStore.Validate(s, out clean, out why)) continue;
+                    ulong h = HashDatabase.Crc64(clean);
+                    if (!have.Add(h) || Lookup(h) != null) continue;
+                    fresh.Add(clean);
+                }
+            }
+            if (fresh.Count == 0) { SetStatus("No new names in " + files.Count + " file(s) under " + folder + ".", false); return 0; }
+            try
+            {
+                string path = Path.Combine(_ctx.CustomNames.Folder, ImportFileName);
+                Directory.CreateDirectory(_ctx.CustomNames.Folder);
+                File.AppendAllText(path, string.Join("\r\n", fresh.ToArray()) + "\r\n", new UTF8Encoding(false));
+            }
+            catch (Exception e) { SetStatus("Could not save imported names: " + e.Message, true); return 0; }
+            _ctx.ReloadCustomNames();
+            int named = 0, total = 0;
+            if (_doc != null)
+                foreach (ulong k in LogicKeyGuesser.RuleKeys(_doc)) { total++; if (Lookup(k) != null) named++; }
+            SetStatus("Imported " + fresh.Count + " new names from " + files.Count + " file(s) into " + CustomNameStore.FolderName + "/" + ImportFileName
+                + (_doc != null ? ". Rule keys named in this dialogue: " + named + " of " + total + "." : "."), false);
+            return fresh.Count;
+        }
+
+        IEnumerable<uint> AllLineIds()
+        {
+            for (int i = 0; i < _doc.Nodes.Count; i++)
+                foreach (uint id in DlgDocument.LineIds(_doc.Nodes[i])) yield return id;
         }
 
         static MetaValue MapGet(MetaValue map, ulong key)

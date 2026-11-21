@@ -103,6 +103,11 @@ namespace TFM.Core
     {
         public NameTable TypeNames = NameTable.Empty;
         public NameTable KeyNames = NameTable.Empty;
+        /// <summary>
+        /// Names from the game's Lua scripts (Assets/Data/LogicNames.bytes). Logic keys, rule keys and
+        /// many property keys are hashes of these strings; used when KeyNames has no entry.
+        /// </summary>
+        public NameTable LogicNames = NameTable.Empty;
         /// <summary>Built-in and custom file names merged; what every lookup and picker uses.</summary>
         public NameTable FileNames = NameTable.Empty;
 
@@ -150,7 +155,7 @@ namespace TFM.Core
         }
 
         public string Type(ulong hash) { return TypeNames.NameOf(hash); }
-        public string Key(ulong hash) { return KeyNames.NameOf(hash); }
+        public string Key(ulong hash) { return KeyNames.NameOf(hash) ?? LogicNames.NameOf(hash); }
 
         /// <summary>Every file name from the archive dumps, sorted, for the reference picker.</summary>
         public IReadOnlyList<string> FileNameList { get { return FileNames.SortedNames; } }

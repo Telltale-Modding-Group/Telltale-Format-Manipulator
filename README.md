@@ -23,3 +23,6 @@ TelltaleToolKit by iMrShadow (https://github.com/iMrShadow/TelltaleToolKit) was 
 Everything else here is made by Claude.
 
 (Master Bank.strings.bank and *.soundeventbankmap may contain FMOD references that are currently missing from chore editor, need a solution)
+
+(logic_game*.prop files in each episode's archive:
+- Episode 1 (WDC_pc_WalkingDead101_data.ttarch2): logic_game.prop, logic_game_drugstore.prop, logic_game_office.prop, logic_game_maconst.prop, logic_game_motorInn.prop and others - needed for conditions in dlog)
