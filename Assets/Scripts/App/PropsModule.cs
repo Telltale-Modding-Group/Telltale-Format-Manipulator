@@ -523,7 +523,7 @@ namespace TFM.App
 
                 default:
                     {
-                        DrawReferenceSlots(el, index);
+                        DrawReferenceSlots(field, el, index);
                         GUILayout.Label(HexDump(el.Value), GuiUtil.Mono);
                         return false;
                     }
@@ -545,7 +545,7 @@ namespace TFM.App
 
             ulong h = PropFile.ReadU64(el.Value, offset);
             string file = FileLabel(h);
-            GUILayout.Label(caption + ": " + (file ?? "(no name for this hash)"), GuiUtil.Note);
+            GUILayout.Label(caption + ": " + RefText(h, file, "file"), GuiUtil.Note);
             GUILayout.Label("hash 0x" + h.ToString("X16"), GuiUtil.Note);
 
             GUILayout.BeginHorizontal();
@@ -677,14 +677,17 @@ namespace TFM.App
         /// Lists every 8-byte slot in an undecoded value that resolves to a known file name, and
         /// makes each one editable. Layout is unknown, so slots are recognised by their content.
         /// </summary>
-        void DrawReferenceSlots(PropElement el, int elementIndex)
+        void DrawReferenceSlots(PropField field, PropElement el, int elementIndex)
         {
             byte[] value = el.Value;
             int shown = 0;
             for (int o = 0; o + 8 <= value.Length && shown < 32; o++)
             {
                 ulong h = PropFile.ReadU64(value, o);
-                if (h == 0 || FileLabel(h) == null) continue;
+                // A Handle<...> value is a single file reference, so its editor shows even when the
+                // slot is empty; elsewhere only slots that resolve to a name are recognisable.
+                bool emptyHandle = h == 0 && value.Length == 8 && IsHandleType(field.TypeHash);
+                if (!emptyHandle && (h == 0 || FileLabel(h) == null)) continue;
                 if (shown == 0) GUILayout.Label("File references inside this value:", GuiUtil.SubHeader);
                 DrawReferenceEditor(el, elementIndex, o, "+" + o);
                 shown++;
@@ -724,6 +727,19 @@ namespace TFM.App
             };
 
             _refPicker.Open("Choose the file this reference should point at", names, preselect, null, onPick);
+        }
+
+        bool IsHandleType(ulong typeHash)
+        {
+            string n = _ctx != null ? _ctx.PropNames.Type(typeHash) : null;
+            return n != null && n.StartsWith("Handle<", StringComparison.Ordinal);
+        }
+
+        /// <summary>Display text for a reference: its name, "empty" for a zero hash, else the unknown hash.</summary>
+        static string RefText(ulong hash, string name, string what)
+        {
+            if (hash == 0) return "(empty, no " + what + " set)";
+            return name ?? "0x" + hash.ToString("X16") + " (no name for this hash)";
         }
 
         static bool BoolValue(byte[] v)
@@ -825,7 +841,7 @@ namespace TFM.App
                 {
                     ulong h = PropFile.ReadU64(el.Value, 0);
                     GUILayout.BeginHorizontal();
-                    GUILayout.Label(FileLabel(h) ?? "0x" + h.ToString("X16") + " (no name for this hash)", GuiUtil.Wrap);
+                    GUILayout.Label(RefText(h, FileLabel(h), "texture"), GuiUtil.Wrap);
                     GUILayout.FlexibleSpace();
                     if (GUILayout.Button("Replace texture...", GuiUtil.W(140))) OpenReferencePicker(el, 30000 + ui, 0);
                     if (GUILayout.Button("Add Custom Name...", GuiUtil.W(150))) OpenCustomName(el, 0);
