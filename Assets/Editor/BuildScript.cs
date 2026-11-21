@@ -71,7 +71,25 @@ public static class BuildScript
         {
             if (report.summary.result != BuildResult.Succeeded) return;
             CopyNameDumps(report.summary.outputPath);
+            WriteCustomNamesFolder(report.summary.outputPath);
         }
+    }
+
+    /// <summary>
+    /// Every player ships a CustomNames folder next to the .exe holding only an empty
+    /// custom_names.txt, so users have a place for their own names from the first run. It is
+    /// written fresh on each build; names added while testing in the editor are not shipped.
+    /// (The app also recreates the folder at startup if it is missing.)
+    /// </summary>
+    public static void WriteCustomNamesFolder(string exePath)
+    {
+        if (string.IsNullOrEmpty(exePath)) return;
+        string dir = Path.Combine(Path.GetDirectoryName(exePath), TFM.Core.CustomNameStore.FolderName);
+        if (Directory.Exists(dir)) Directory.Delete(dir, true);
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, TFM.Core.CustomNameStore.DefaultFileName), "", new System.Text.UTF8Encoding(false));
+        Debug.Log("[Build] Wrote an empty " + TFM.Core.CustomNameStore.FolderName + "/"
+                  + TFM.Core.CustomNameStore.DefaultFileName + " next to " + Path.GetFileName(exePath));
     }
 
     static void CopyNameDumps(string exePath)

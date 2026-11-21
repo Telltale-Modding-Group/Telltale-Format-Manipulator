@@ -43,6 +43,29 @@ namespace TFM.Core
         }
 
         /// <summary>
+        /// Reads a text dump ("Dump Txt" output: one name per line) into <paramref name="into"/>,
+        /// hashing each name the way the game does. Blank lines are skipped. Returns how many
+        /// entries were new.
+        /// </summary>
+        public static int LoadTextInto(Dictionary<ulong, string> into, string text)
+        {
+            if (into == null || string.IsNullOrEmpty(text)) return 0;
+            int added = 0;
+            string[] lines = text.Split('\n');
+            for (int i = 0; i < lines.Length; i++)
+            {
+                // Trim drops the '\r' of CRLF files; the byte-order mark only appears on line one.
+                string name = lines[i].Trim().TrimStart('\uFEFF');
+                if (name.Length == 0) continue;
+                ulong hash = HashDatabase.Crc64(name);
+                if (into.ContainsKey(hash)) continue;
+                into[hash] = name;
+                added++;
+            }
+            return added;
+        }
+
+        /// <summary>
         /// Reads every name dump under the first of <paramref name="folders"/> that exists and
         /// contains dumps. Files that are not dumps are skipped.
         /// </summary>

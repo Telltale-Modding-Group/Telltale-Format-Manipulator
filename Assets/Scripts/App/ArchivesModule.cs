@@ -59,6 +59,8 @@ namespace TFM.App
         readonly List<string> _batchQueue = new List<string>();
         readonly List<BatchItem> _batchDone = new List<BatchItem>();
         string _batchFolder = "";
+        string _batchOutFolder = "";   // where name files go: the archive folder, or CustomNames
+        bool _batchToCustom;
         string _batchExt = "txt";
         bool _batchRunning;
         volatile bool _batchStop;
@@ -347,7 +349,8 @@ namespace TFM.App
             GUILayout.Label("Folder", GuiUtil.SubHeader, GuiUtil.W(48));
 
             GUI.enabled = !_batchRunning;
-            if (GUILayout.Button("Dump whole folder...", GuiUtil.MinW(150))) BrowseBatchFolder();
+            if (GUILayout.Button("Dump whole folder...", GuiUtil.MinW(150))) BrowseBatchFolder(false);
+            if (GUILayout.Button("Dump whole folder to CustomNames...", GuiUtil.MinW(250))) BrowseBatchFolder(true);
 
             GUILayout.Label("as", GuiUtil.W(16));
             int format = _batchExt == "bin" ? 1 : 0;
@@ -363,8 +366,9 @@ namespace TFM.App
             }
             else
             {
-                GUILayout.Label("Every .ttarch and .ttarch2 in the folder is read with the key mode above,"
-                                + " and a name file is written next to each archive.", GuiUtil.Note);
+                GUILayout.Label("Every .ttarch and .ttarch2 in the folder is read with the key mode above. The first"
+                                + " button writes a name file next to each archive; the second writes them into the"
+                                + " tool's CustomNames folder, where the Props editor picks them up.", GuiUtil.Note);
             }
             GUILayout.EndHorizontal();
 
@@ -651,12 +655,25 @@ namespace TFM.App
         /// Finds the archives in a folder and queues them. Nothing is read yet: the queue is
         /// drained one archive per frame by <see cref="StepBatch"/>.
         /// </summary>
-        void StartBatch(string folder, string ext)
+        void StartBatch(string folder, string ext, bool toCustom)
         {
             if (!Directory.Exists(folder))
             {
                 SetStatus("No such folder: " + folder, true);
                 return;
+            }
+
+            string outFolder = folder;
+            if (toCustom)
+            {
+                if (_ctx.CustomNames == null) { SetStatus("The CustomNames folder is not available.", true); return; }
+                string problem = _ctx.CustomNames.EnsureExists();
+                if (problem != null)
+                {
+                    SetStatus("Cannot write to " + _ctx.CustomNames.Folder + ": " + problem, true);
+                    return;
+                }
+                outFolder = _ctx.CustomNames.Folder;
             }
 
             TtArchiveKey key = null;
@@ -695,6 +712,8 @@ namespace TFM.App
             }
 
             _batchFolder = folder;
+            _batchOutFolder = outFolder;
+            _batchToCustom = toCustom;
             _batchExt = ext;
             _batchDone.Clear();
             _batchIndex = 0;
@@ -757,7 +776,7 @@ namespace TFM.App
                 else
                 {
                     List<NamePair> names = CollectUnique(result);
-                    string target = Path.Combine(_batchFolder,
+                    string target = Path.Combine(_batchOutFolder,
                         Path.GetFileNameWithoutExtension(path) + "_names." + _batchExt);
                     if (_batchExt == "bin") WriteBinary(target, names);
                     else WriteText(target, names);
@@ -793,6 +812,12 @@ namespace TFM.App
             if (stopped == null && _batchQueue.Count - _batchDone.Count > 0)
                 msg += " (" + (_batchQueue.Count - _batchDone.Count) + " not processed)";
             msg += ".";
+            if (_batchToCustom && written > 0)
+            {
+                // Make the new names usable in the Props editor straight away.
+                int names = _ctx.ReloadCustomNames();
+                msg += " Written to " + _batchOutFolder + "; " + names + " custom names are now loaded.";
+            }
             SetStatus(msg, _batchFailed > 0);
         }
         void StopBatch()
@@ -801,7 +826,7 @@ namespace TFM.App
             _batchStop = true;
         }
 
-        void BrowseBatchFolder()
+        void BrowseBatchFolder(bool toCustom)
         {
             if (!NativeFileDialog.IsSupported)
             {
@@ -811,7 +836,7 @@ namespace TFM.App
             _ctx.RunDeferred(() =>
             {
                 string folder = NativeFileDialog.OpenFolder("Choose a folder of archives", _batchFolder);
-                if (!string.IsNullOrEmpty(folder)) StartBatch(folder, _batchExt);
+                if (!string.IsNullOrEmpty(folder)) StartBatch(folder, _batchExt, toCustom);
             });
         }
 

@@ -64,6 +64,7 @@ namespace TFM.App
             });
 
             LoadPropNames();
+            LoadCustomNames();
 
             RegisterModules();
 
@@ -95,10 +96,38 @@ namespace TFM.App
             if (!string.IsNullOrEmpty(nameDumpFolder))
             {
                 NameTable files = FileNameDumps.LoadFolderAt(NameDumpRoots(nameDumpFolder));
-                names.FileNames = files;
+                names.SetBuiltInFileNames(files);
                 if (files.Count == 0)
                     _status = "No archive name dumps found, so file references will show as hashes."
                               + " Looked in: " + string.Join("; ", NameDumpRoots(nameDumpFolder));
+            }
+        }
+
+        /// <summary>
+        /// CustomNames sits next to the application, where users can find it: the project root in
+        /// the editor, the folder holding the .exe in a player (Application.dataPath is
+        /// Assets in the editor and &lt;exe&gt;_Data in a player; its parent is the right place in
+        /// both). The build writes it there too, and it is recreated here if it went missing.
+        /// </summary>
+        public static string CustomNamesFolder()
+        {
+            return Path.Combine(Directory.GetParent(Application.dataPath).FullName, CustomNameStore.FolderName);
+        }
+
+        void LoadCustomNames()
+        {
+            _ctx.CustomNames = new CustomNameStore(CustomNamesFolder());
+            string problem = _ctx.CustomNames.EnsureExists();
+            int count = _ctx.ReloadCustomNames();
+            if (problem != null)
+            {
+                _status = "Could not create " + _ctx.CustomNames.DefaultFile + " (" + problem + "). Custom names cannot be saved"
+                          + " until the application folder is writable.";
+                _statusError = true;
+            }
+            else if (count > 0)
+            {
+                Debug.Log("[TFM] " + count + " custom names from " + _ctx.CustomNames.FilesRead + " file(s) in " + _ctx.CustomNames.Folder);
             }
         }
 
