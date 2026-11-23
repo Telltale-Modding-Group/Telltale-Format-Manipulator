@@ -18,6 +18,7 @@ Chores: reading and editing (TWDTTDS only).
 
 Dialogues: conversation nodes, reading and editing (TWDTTDS only).
 
+
 It was entirely vide-coded using Claude Opus model.
 
 TelltaleGames_D3DMesh by RandomTBrush (https://github.com/RandomTBush/RTB-3DSMax-Scripts) was used as reference to study the .skl format. BoneNames.HashDB file was taken from TelltaleGames_D3DMesh (renamed BoneNames.HashDB.bytes).
