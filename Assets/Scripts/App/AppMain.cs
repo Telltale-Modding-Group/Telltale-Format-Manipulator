@@ -30,6 +30,9 @@ namespace TFM.App
         [Tooltip("Assets/Data/LogicNames.bytes - strings from the game's Lua scripts, used to name hashed logic and property keys.")]
         public TextAsset logicNames;
 
+        [Tooltip("Assets/Data/LipsyncModel.bytes - viseme model calibrated on the shipped lipsync lines (pre-calibrated option).")]
+        public TextAsset lipsyncModel;
+
         [Tooltip("Folder of archive name dumps (Dump Binary output). Read at startup to resolve "
                  + "mesh, texture and chore references in .prop files. Relative to the data folder.")]
         public string nameDumpFolder = "Resources/Names";
@@ -71,6 +74,7 @@ namespace TFM.App
 
             LoadPropNames();
             LoadCustomNames();
+            LoadLipsyncModel();
 
             RegisterModules();
 
@@ -109,6 +113,15 @@ namespace TFM.App
                     _status = "No archive name dumps found, so file references will show as hashes."
                               + " Looked in: " + string.Join("; ", NameDumpRoots(nameDumpFolder));
             }
+        }
+
+        void LoadLipsyncModel()
+        {
+            TextAsset asset = lipsyncModel;
+#if UNITY_EDITOR
+            if (asset == null) asset = UnityEditor.AssetDatabase.LoadAssetAtPath<TextAsset>("Assets/Data/LipsyncModel.bytes");
+#endif
+            if (asset != null && asset.text != null) _ctx.LipsyncModelText = asset.text;
         }
 
         void LoadLogicNames()

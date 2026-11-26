@@ -267,7 +267,10 @@ namespace TFM.Core.Lipsync
         /// Analyses a whole clip. <paramref name="sensitivity"/> 0..1 scales the speech threshold
         /// (higher splits quieter speech). Returns keys sorted by time, covering speech and pauses.
         /// </summary>
-        public static List<LipKey> Analyze(AudioData audio, float sensitivity, float minPause, VisemeModel model = null)
+        /// <param name="minKeyMs">Shortest viseme, in milliseconds. The shipped data averages one key per 120 ms.</param>
+        /// <param name="smoothing">How many majority-smoothing passes to run over the viseme sequence.</param>
+        public static List<LipKey> Analyze(AudioData audio, float sensitivity, float minPause, VisemeModel model = null,
+                                           float minKeyMs = 100f, int smoothing = 1, float openScale = 1f)
         {
             List<LipKey> keys = new List<LipKey>();
             if (audio == null || audio.Samples.Length == 0) return keys;
@@ -305,28 +308,30 @@ namespace TFM.Core.Lipsync
                 i = j;
             }
 
-            // Walk the timeline, emitting speech slots and pause keys.
+            // Split speech into viseme slots, then smooth them: the shipped keys overlap heavily
+            // (fade-out runs past the next key) and a mouth that closes inside every slot snaps.
+            int minFrames = Math.Max(2, (int)Math.Round(minKeyMs / HopMs));
+            int maxFrames = Math.Max(minFrames + 1, (int)Math.Round(190f / HopMs));
+
+            string[] vis = new string[n];               // one viseme per 10 ms frame, null = silence
+            List<int[]> pauses = new List<int[]>();     // silent runs, [start, end)
             int frame = 0;
             while (frame < n)
             {
                 bool speech = voiced[frame];
                 int start = frame;
                 while (frame < n && voiced[frame] == speech) frame++;
-                float t0 = start * HopMs / 1000f;
-                float t1 = frame * HopMs / 1000f;
-                float dur = t1 - t0;
 
                 if (!speech)
                 {
-                    if (dur >= minPause) keys.Add(PauseKey(t0, dur));
+                    float silent = (frame - start) * HopMs / 1000f;
+                    if (silent >= Math.Max(0.3f, minPause)) pauses.Add(new int[] { start, frame });
                     continue;
                 }
 
-                // Split the phrase into syllables at energy valleys, 60-140 ms apiece.
+                // Cut the phrase at energy valleys, no slot shorter than minKeyMs.
                 List<int> cuts = new List<int>();
                 cuts.Add(start);
-                int minFrames = Math.Max(2, 60 / HopMs);
-                int maxFrames = Math.Max(minFrames + 1, 140 / HopMs);
                 int at = start + minFrames;
                 while (at < frame - minFrames)
                 {
@@ -341,30 +346,89 @@ namespace TFM.Core.Lipsync
                 }
                 cuts.Add(frame);
 
-                // Merge chunks that came out too short.
-                List<int> merged = new List<int>();
-                merged.Add(cuts[0]);
-                for (int i = 1; i < cuts.Count; i++)
+                for (int i = 0; i + 1 < cuts.Count; i++)
                 {
-                    if (cuts[i] - merged[merged.Count - 1] < minFrames && i < cuts.Count - 1) continue;
-                    merged.Add(cuts[i]);
-                }
-
-                for (int i = 0; i + 1 < merged.Count; i++)
-                {
-                    int a = merged[i], b = merged[i + 1];
+                    int a = cuts[i], b = cuts[i + 1];
                     if (b <= a) continue;
                     string ph = model != null && model.IsTrained ? model.Classify(SlotFeatures(fr, a, b)) : null;
                     if (ph == null) ph = ToViseme(Classify(a, b, rms, zcr, centroid, low, mid, high, air));
-                    float st = a * HopMs / 1000f;
-                    float du = (b - a) * HopMs / 1000f;
-                    float loud = Math.Min(1f, rms[Math.Min(n - 1, (a + b) / 2)] / Math.Max(1e-5f, Percentile(rms, 0.95f)));
-                    keys.Add(SpeechKey(st, du, ph, 0.35f + 0.65f * loud));
+                    for (int k = a; k < b && k < n; k++) vis[k] = ph;
                 }
             }
 
+            // Smoothing: a viseme flanked by the same viseme on both sides is noise.
+            for (int pass = 0; pass < smoothing; pass++)
+            {
+                string[] copy = (string[])vis.Clone();
+                for (int i = 1; i + 1 < n; i++)
+                    if (copy[i] != null && copy[i - 1] != null && copy[i + 1] != null
+                        && copy[i - 1] == copy[i + 1] && copy[i] != copy[i - 1])
+                        vis[i] = copy[i - 1];
+            }
+
+            // Absorb runs that are still too short into the longer neighbour.
+            for (int pass = 0; pass < 2; pass++)
+            {
+                for (int i = 0; i < n; i++)
+                {
+                    if (vis[i] == null) continue;
+                    int a = i;
+                    while (i < n && vis[i] == vis[a]) i++;
+                    int b = i;
+                    if (b - a >= minFrames) continue;
+                    int left = a - 1, right = b;
+                    bool hasL = left >= 0 && vis[left] != null, hasR = right < n && vis[right] != null;
+                    if (!hasL && !hasR) continue;
+                    string take = hasL && hasR ? (TakeViseme(vis, left, -1) == TakeViseme(vis, right, 1) ? vis[left] : vis[left]) : hasL ? vis[left] : vis[right];
+                    for (int k = a; k < b; k++) vis[k] = take;
+                }
+            }
+
+            // Loudness, smoothed over a quarter second so openness does not jump either.
+            float p95 = Math.Max(1e-5f, Percentile(rms, 0.95f));
+            float[] loud = new float[n];
+            const int LoudWin = 6;
+            for (int i = 0; i < n; i++)
+            {
+                float sum = 0f;
+                int c = 0;
+                for (int k = Math.Max(0, i - LoudWin); k <= Math.Min(n - 1, i + LoudWin); k++) { sum += rms[k]; c++; }
+                loud[i] = Math.Min(1f, sum / Math.Max(1, c) / p95);
+            }
+
+            // One key per viseme run, with the shipped fades: short hold, long overlapping fades.
+            for (int i = 0; i < n; i++)
+            {
+                if (vis[i] == null) continue;
+                int a = i;
+                while (i < n && vis[i] == vis[a]) i++;
+                int b = i;
+                float dur = (b - a) * HopMs / 1000f;
+                float t0 = a * HopMs / 1000f;
+                float fadeIn = Clamp(dur * 0.6f, 0.04f, 0.12f);
+                float fadeOut = Clamp(dur * 0.9f, 0.07f, 0.25f);
+                float hold = Math.Max(0.01f, dur * 0.25f);
+                float contribution = Clamp01((0.55f + 0.30f * loud[Math.Min(n - 1, (a + b) / 2)]) * openScale);
+                keys.Add(new LipKey
+                {
+                    Time = t0,
+                    FadeIn = fadeIn,
+                    Hold = hold,
+                    FadeOut = fadeOut,
+                    Contribution = contribution,
+                    Phoneme = Hash(vis[a])
+                });
+            }
+            for (int i = 0; i < pauses.Count; i++) keys.Add(PauseKey(pauses[i][0] * HopMs / 1000f, (pauses[i][1] - pauses[i][0]) * HopMs / 1000f));
+
             keys.Sort((a, b) => a.Time.CompareTo(b.Time));
             return keys;
+        }
+
+        static string TakeViseme(string[] vis, int at, int dir)
+        {
+            while (at >= 0 && at < vis.Length && vis[at] == null) at += dir;
+            return at >= 0 && at < vis.Length ? vis[at] : null;
         }
 
         static LipKey PauseKey(float t, float dur)
@@ -372,9 +436,9 @@ namespace TFM.Core.Lipsync
             return new LipKey
             {
                 Time = t,
-                FadeIn = Math.Min(0.05f, dur * 0.2f),
-                FadeOut = Math.Min(0.08f, dur * 0.25f),
-                Hold = Math.Max(0f, dur - Math.Min(0.05f, dur * 0.2f) - Math.Min(0.08f, dur * 0.25f)),
+                FadeIn = Clamp(dur * 0.4f, 0.04f, 0.12f),
+                FadeOut = Clamp(dur * 0.6f, 0.06f, 0.20f),
+                Hold = Math.Max(0.01f, dur * 0.3f),
                 Contribution = 0f,
                 Phoneme = Hash("default")
             };
@@ -470,6 +534,8 @@ namespace TFM.Core.Lipsync
 
         static float MelFromHz(float hz) { return 2595f * (float)Math.Log10(1f + hz / 700f); }
         static float MelToHz(float mel) { return 700f * ((float)Math.Pow(10f, mel / 2595f) - 1f); }
+
+        static float Clamp(float v, float lo, float hi) { return v < lo ? lo : v > hi ? hi : v; }
 
         static float Clamp01(float v) { return v < 0f ? 0f : v > 1f ? 1f : v; }
 
