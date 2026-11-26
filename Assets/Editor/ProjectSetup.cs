@@ -96,6 +96,7 @@ public static class ProjectSetup
         app.propTypeLayouts = AssetDatabase.LoadAssetAtPath<TextAsset>("Assets/Data/PropsTypeLayouts.bytes");
         app.metaLayouts = AssetDatabase.LoadAssetAtPath<TextAsset>("Assets/Data/MetaLayouts.bytes");
         app.logicNames = AssetDatabase.LoadAssetAtPath<TextAsset>("Assets/Data/LogicNames.bytes");
+        app.lipsyncModel = AssetDatabase.LoadAssetAtPath<TextAsset>("Assets/Data/LipsyncModel.bytes");
         if (app.metaLayouts == null)
             Debug.LogWarning("[ProjectSetup] Assets/Data/MetaLayouts.bytes is missing. Chores and dialogues cannot be opened without it.");
         if (app.propTypeNames == null || app.propKeyNames == null)

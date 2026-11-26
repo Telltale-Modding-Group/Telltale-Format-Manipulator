@@ -58,6 +58,14 @@ namespace TFM.App
         string _lsAudio = "", _lsTemplate = "", _lsOut = "";
         float _lsSensitivity = 0.5f;
         float _lsMinPause = 0.12f;
+        float _lsMinKeyMs = 100f;      // the shipped lines change viseme about every 100 ms
+        int _lsSmooth = 1;
+        float _lsOpenScale = 1f;       // multiplies how far the mouth opens
+
+        // 0 = built-in rules, 1 = shipped pre-calibration, 2 = calibration trained here
+        int _lsModelMode;
+        VisemeModel _preModel;
+        const string ModelModePref = "tfm.lipsync.modelMode";
         bool _lsUseOpenAsTemplate = true;
         bool _lsOpenResult = true;
         string _lsInFolder = "", _lsOutFolder = "";
@@ -88,7 +96,9 @@ namespace TFM.App
             public string OutFolder;
             public string Template;
             public bool Overwrite;
-            public float Sensitivity, MinPause;
+            public float Sensitivity, MinPause, MinKeyMs, OpenScale;
+            public int Smoothing;
+            public VisemeModel Model;
             public int Index, Ok, Failed, Skipped;
             public bool Waiting;
             public string LastError;
@@ -119,6 +129,32 @@ namespace TFM.App
                 if (File.Exists(_modelPath)) _model = VisemeModel.Parse(File.ReadAllText(_modelPath));
             }
             catch { _model = null; }
+
+            try
+            {
+                if (_ctx != null && !string.IsNullOrEmpty(_ctx.LipsyncModelText))
+                    _preModel = VisemeModel.Parse(_ctx.LipsyncModelText);
+            }
+            catch { _preModel = null; }
+
+            _lsModelMode = PlayerPrefs.GetInt(ModelModePref, _model != null ? 2 : _preModel != null ? 1 : 0);
+            if (_lsModelMode == 1 && _preModel == null) _lsModelMode = _model != null ? 2 : 0;
+            if (_lsModelMode == 2 && _model == null) _lsModelMode = _preModel != null ? 1 : 0;
+        }
+
+        /// <summary>The model the chosen mode uses, or null for the built-in rules.</summary>
+        VisemeModel ActiveModel()
+        {
+            if (_lsModelMode == 1) return _preModel;
+            if (_lsModelMode == 2) return _model;
+            return null;
+        }
+
+        void SetModelMode(int mode)
+        {
+            _lsModelMode = mode;
+            PlayerPrefs.SetInt(ModelModePref, mode);
+            PlayerPrefs.Save();
         }
 
         void SaveModel()
@@ -925,10 +961,37 @@ namespace TFM.App
         {
             const string audioFilter = "Audio (*.wav;*.mp3;*.ogg)\0*.wav;*.mp3;*.ogg\0All files (*.*)\0*.*\0";
             _inspScroll = GUILayout.BeginScrollView(_inspScroll);
+            // Bound the page width: expanded text fields otherwise widen the scroll content and
+            // produce a horizontal scrollbar that also hides the buttons on the right.
+            float contentW = Mathf.Max(360f, _area.width - GuiUtil.S(96f));
+            GUILayout.BeginVertical(GUILayout.Width(contentW));
 
             GUILayout.Label("Generate lipsync from audio", GuiUtil.SubHeader);
             GUILayout.Label("The template supplies the file layout and rig; the audio supplies the timing. The result is a"
                 + " normal uncompressed phoneme animation, editable on the Timeline tab afterwards.", GuiUtil.Wrap);
+
+            GuiUtil.Space(6);
+            GUILayout.Label("Viseme classifier", GuiUtil.SubHeader);
+            GUILayout.BeginHorizontal();
+            string[] modes = { "Basic rules", "Pre-calibrated data", "Custom calibration" };
+            float[] widths = { 120f, 170f, 160f };
+            for (int i = 0; i < modes.Length; i++)
+            {
+                bool active = _lsModelMode == i;
+                if (GUILayout.Toggle(active, modes[i], GUI.skin.button, GuiUtil.W(widths[i])) && !active) SetModelMode(i);
+            }
+            GUILayout.FlexibleSpace();
+            GUILayout.EndHorizontal();
+            if (_lsModelMode == 0)
+                GUILayout.Label("Acoustic rules written by hand. Nothing to set up; the safest default when the audio does not match the game.", GuiUtil.Note);
+            else if (_lsModelMode == 1)
+                GUILayout.Label(_preModel != null
+                    ? "Calibrated on " + _preModel.KeysUsed + " keys from the shipped lipsync lines (Assets/Data/LipsyncModel.bytes)."
+                    : "The pre-calibrated data is missing (Assets/Data/LipsyncModel.bytes); using the built-in rules.", GuiUtil.Note);
+            else
+                GUILayout.Label(_model != null
+                    ? "Your own calibration: " + _model.KeysUsed + " keys, saved to " + _modelPath + "."
+                    : "No custom calibration yet - run Calibrate below. Until then the built-in rules are used.", GuiUtil.Note);
 
             GuiUtil.Space(6);
             GUILayout.Label("Template", GuiUtil.SubHeader);
@@ -938,7 +1001,7 @@ namespace TFM.App
                 GUILayout.Label("(The open file has no phoneme track - pick a template below.)", GuiUtil.Warning);
             GUI.enabled = !_lsUseOpenAsTemplate;
             GUILayout.BeginHorizontal();
-            _lsTemplate = GUILayout.TextField(_lsTemplate ?? "", GuiUtil.MinW(200));
+            _lsTemplate = GUILayout.TextField(_lsTemplate ?? "", GuiUtil.W(Mathf.Max(160f, contentW - GuiUtil.S(200f))));
             if (GUILayout.Button("Browse...", GuiUtil.W(80))) PickFile("Choose a lipsync template", AnmFilter, t => _lsTemplate = t);
             GUILayout.EndHorizontal();
             GUI.enabled = true;
@@ -947,7 +1010,7 @@ namespace TFM.App
             GUILayout.Label("One file", GuiUtil.SubHeader);
             GUILayout.BeginHorizontal();
             GUILayout.Label("Audio", GuiUtil.W(70));
-            _lsAudio = GUILayout.TextField(_lsAudio ?? "", GuiUtil.MinW(200));
+            _lsAudio = GUILayout.TextField(_lsAudio ?? "", GuiUtil.W(Mathf.Max(160f, contentW - GuiUtil.S(200f))));
             if (GUILayout.Button("Browse...", GuiUtil.W(80)))
                 PickFile("Choose audio", audioFilter, t =>
                 {
@@ -957,7 +1020,7 @@ namespace TFM.App
             GUILayout.EndHorizontal();
             GUILayout.BeginHorizontal();
             GUILayout.Label("Output .anm", GuiUtil.W(70));
-            _lsOut = GUILayout.TextField(_lsOut ?? "", GuiUtil.MinW(200));
+            _lsOut = GUILayout.TextField(_lsOut ?? "", GuiUtil.W(Mathf.Max(160f, contentW - GuiUtil.S(200f))));
             if (GUILayout.Button("Browse...", GuiUtil.W(80)))
             {
                 if (!NativeFileDialog.IsSupported) { SetStatus("The file dialog is only available in Windows builds.", true); }
@@ -976,9 +1039,9 @@ namespace TFM.App
             GUI.enabled = true;
 
             GuiUtil.Space(10);
-            GUILayout.Label("Calibration", GuiUtil.SubHeader);
-            GUILayout.Label("Learns the rig's viseme shapes from shipped lines: point at a folder of lipsync .anm files and the"
-                + " folder holding their audio. Without calibration the built-in rules are used.", GuiUtil.Note);
+            GUILayout.Label("Custom calibration", GuiUtil.SubHeader);
+            GUILayout.Label("Trains a model on the game's own lines: point at a folder of lipsync .anm files and the folder"
+                + " holding their audio. The result is saved and selected as \"Custom calibration\".", GuiUtil.Note);
             if (_model != null && _model.IsTrained)
                 GUILayout.Label("Model: " + _model.KeysUsed + " keys, " + _model.Visemes.Count + " visemes.  " + _modelPath, GuiUtil.Note);
             else
@@ -986,7 +1049,7 @@ namespace TFM.App
 
             GUILayout.BeginHorizontal();
             GUILayout.Label("Lipsync .anm folder", GuiUtil.W(120));
-            _lsAnmFolder = GUILayout.TextField(_lsAnmFolder ?? "", GuiUtil.MinW(200));
+            _lsAnmFolder = GUILayout.TextField(_lsAnmFolder ?? "", GuiUtil.W(Mathf.Max(160f, contentW - GuiUtil.S(200f))));
             if (GUILayout.Button("Browse...", GuiUtil.W(80))) PickFolder("Choose the folder of shipped lipsync files", t => _lsAnmFolder = t);
             GUILayout.EndHorizontal();
 
@@ -1003,7 +1066,8 @@ namespace TFM.App
             {
                 _model = null;
                 try { if (File.Exists(_modelPath)) File.Delete(_modelPath); } catch { }
-                _calibSummary = "Calibration cleared; using built-in rules.";
+                if (_lsModelMode == 2) SetModelMode(_preModel != null ? 1 : 0);
+                _calibSummary = "Custom calibration cleared.";
             }
             GUILayout.EndHorizontal();
 
@@ -1025,7 +1089,7 @@ namespace TFM.App
 
             GUILayout.BeginHorizontal();
             GUILayout.Label("Input folder", GuiUtil.W(90));
-            _lsInFolder = GUILayout.TextField(_lsInFolder ?? "", GuiUtil.MinW(200));
+            _lsInFolder = GUILayout.TextField(_lsInFolder ?? "", GuiUtil.W(Mathf.Max(160f, contentW - GuiUtil.S(200f))));
             if (GUILayout.Button("Browse...", GuiUtil.W(80))) PickFolder("Choose the folder of voice files", t => _lsInFolder = t);
             GUILayout.EndHorizontal();
 
@@ -1034,7 +1098,7 @@ namespace TFM.App
             GUILayout.BeginHorizontal();
             GUILayout.Label("Output folder", GuiUtil.W(90));
             GUI.enabled = !_lsSameFolder;
-            _lsOutFolder = GUILayout.TextField(_lsOutFolder ?? "", GuiUtil.MinW(200));
+            _lsOutFolder = GUILayout.TextField(_lsOutFolder ?? "", GuiUtil.W(Mathf.Max(160f, contentW - GuiUtil.S(200f))));
             if (GUILayout.Button("Browse...", GuiUtil.W(80))) PickFolder("Choose the output folder", t => _lsOutFolder = t);
             GUI.enabled = true;
             GUILayout.EndHorizontal();
@@ -1069,6 +1133,7 @@ namespace TFM.App
                 GUILayout.Label(_jobSummary, GuiUtil.Note);
             }
 
+            GUILayout.EndVertical();
             GUILayout.EndScrollView();
         }
 
@@ -1076,10 +1141,33 @@ namespace TFM.App
         {
             GUILayout.BeginHorizontal();
             GUILayout.Label("Sensitivity", GuiUtil.W(70));
-            _lsSensitivity = GUILayout.HorizontalSlider(_lsSensitivity, 0f, 1f, GuiUtil.W(160));
-            GUILayout.Label(GuiUtil.Fmt(_lsSensitivity), GuiUtil.W(40));
-            GuiUtil.LabeledFloat("Ignore pauses shorter than (s)", "anm.ls.pause", ref _lsMinPause, 190);
+            _lsSensitivity = GUILayout.HorizontalSlider(_lsSensitivity, 0f, 1f, GuiUtil.W(150));
+            GUILayout.Label(GuiUtil.Fmt(_lsSensitivity), GuiUtil.W(36));
+            GUILayout.Space(GuiUtil.S(10f));
+            GuiUtil.LabeledFloat("Ignore pauses shorter than (s)", "anm.ls.pause", ref _lsMinPause, 180);
+            GUILayout.FlexibleSpace();
             GUILayout.EndHorizontal();
+
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("Shortest viseme", GuiUtil.W(100));
+            _lsMinKeyMs = GUILayout.HorizontalSlider(_lsMinKeyMs, 60f, 300f, GuiUtil.W(150));
+            GUILayout.Label(Mathf.RoundToInt(_lsMinKeyMs) + " ms", GuiUtil.W(52));
+            GUILayout.Space(GuiUtil.S(10f));
+            GUILayout.Label("Smoothing", GuiUtil.W(72));
+            _lsSmooth = Mathf.RoundToInt(GUILayout.HorizontalSlider(_lsSmooth, 0, 3, GuiUtil.W(90)));
+            GUILayout.Label(_lsSmooth.ToString(), GuiUtil.W(20));
+            GUILayout.FlexibleSpace();
+            GUILayout.EndHorizontal();
+
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("Mouth openness", GuiUtil.W(100));
+            _lsOpenScale = GUILayout.HorizontalSlider(_lsOpenScale, 0f, 2f, GuiUtil.W(150));
+            GUILayout.Label("x" + GuiUtil.Fmt(_lsOpenScale), GuiUtil.W(52));
+            GUILayout.FlexibleSpace();
+            GUILayout.EndHorizontal();
+
+            GUILayout.Label("Shortest viseme and smoothing calm the mouth; openness scales how wide it opens. The shipped lines"
+                + " change viseme about every 100 ms, hold ~30 ms, fade out over ~130 ms and overlap the next key.", GuiUtil.Note);
         }
 
         string ResolveInputFolder()
@@ -1109,7 +1197,7 @@ namespace TFM.App
             {
                 if (audio == null) { SetStatus("Could not read audio: " + err, true); return; }
                 string genErr;
-                if (!GenerateLipsync(_model, template, audio, outPath, _lsSensitivity, _lsMinPause, out genErr))
+                if (!GenerateLipsync(ActiveModel(), template, audio, outPath, _lsSensitivity, _lsMinPause, _lsMinKeyMs, _lsSmooth, _lsOpenScale, out genErr))
                 {
                     SetStatus("Generation failed: " + genErr, true);
                     return;
@@ -1141,6 +1229,10 @@ namespace TFM.App
             j.Overwrite = _lsOverwrite;
             j.Sensitivity = _lsSensitivity;
             j.MinPause = _lsMinPause;
+            j.MinKeyMs = _lsMinKeyMs;
+            j.Smoothing = _lsSmooth;
+            j.OpenScale = _lsOpenScale;
+            j.Model = ActiveModel();
             _job = j;
             _jobSummary = "";
             SetStatus("Generating " + files.Count + " lipsync file(s) into " + outFolder + ".", false);
@@ -1172,7 +1264,7 @@ namespace TFM.App
                 j.Waiting = false;
                 if (audio == null) { j.Failed++; j.LastError = Path.GetFileName(input) + ": " + err; return; }
                 string genErr;
-                if (!GenerateLipsync(_model, j.Template, audio, outPath, j.Sensitivity, j.MinPause, out genErr))
+                if (!GenerateLipsync(j.Model, j.Template, audio, outPath, j.Sensitivity, j.MinPause, j.MinKeyMs, j.Smoothing, j.OpenScale, out genErr))
                 {
                     j.Failed++;
                     j.LastError = Path.GetFileName(input) + ": " + genErr;
@@ -1184,7 +1276,7 @@ namespace TFM.App
         }
 
         /// <summary>Builds one lipsync file from audio, using the template's file layout.</summary>
-        static bool GenerateLipsync(VisemeModel model, string templatePath, AudioData audio, string outPath, float sensitivity, float minPause, out string error)
+        static bool GenerateLipsync(VisemeModel model, string templatePath, AudioData audio, string outPath, float sensitivity, float minPause, float minKeyMs, int smoothing, float openScale, out string error)
         {
             error = null;
             try
@@ -1192,7 +1284,7 @@ namespace TFM.App
                 AnmDocument tmpl = AnmDocument.Load(templatePath);
                 AnmTrack track = tmpl.FirstPhonemeTrack();
                 if (track == null) { error = "the template has no phoneme track"; return false; }
-                List<LipKey> keys = SpeechAnalyzer.Analyze(audio, sensitivity, minPause, model);
+                List<LipKey> keys = SpeechAnalyzer.Analyze(audio, sensitivity, minPause, model, minKeyMs, smoothing, openScale);
                 if (keys.Count == 0) { error = "no speech found in the audio"; return false; }
                 if (!tmpl.ReplacePhonemeKeys(track, keys, audio.Duration)) { error = "could not write the keyframes"; return false; }
                 string dir = Path.GetDirectoryName(outPath);
@@ -1241,6 +1333,7 @@ namespace TFM.App
                 {
                     _model = c.Model;
                     SaveModel();
+                    SetModelMode(2);
                     _calibSummary = "Calibrated on " + c.Keys + " keys from " + c.FilesUsed + " file(s); saved to " + _modelPath + ".";
                     SetStatus(_calibSummary, false);
                 }

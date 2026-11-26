@@ -40,6 +40,12 @@ namespace TFM.App
         /// <summary>The CustomNames folder: user-added file names, merged into PropNames.</summary>
         public CustomNameStore CustomNames { get; set; }
 
+        /// <summary>
+        /// Text of the shipped viseme calibration (Assets/Data/LipsyncModel.bytes), learned from the
+        /// game's own lipsync lines. Empty when it is missing, in which case the built-in rules run.
+        /// </summary>
+        public string LipsyncModelText { get; set; }
+
         /// <summary>Re-reads the CustomNames folder into PropNames. Returns how many names it holds.</summary>
         public int ReloadCustomNames()
         {
