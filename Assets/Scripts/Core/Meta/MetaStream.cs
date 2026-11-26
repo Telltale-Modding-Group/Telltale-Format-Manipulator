@@ -390,6 +390,8 @@ namespace TFM.Core.Meta
                 case "Chore": return ReadChore();
                 case "ChoreResource": return ReadChoreResource();
                 case "Animation": return ReadAnimation();
+                case "CompressedSkeletonPoseKeys":
+                case "CompressedSkeletonPoseKeys2": return ReadCompressedPose(t);
             }
             return ReadStruct(t);
         }
@@ -662,6 +664,27 @@ namespace TFM.Core.Meta
             return v;
         }
 
+        /// <summary>
+        /// Compressed pose keys are hand-serialized: an int32 data size followed by that many bytes.
+        /// Unlike a MetaClass size block the size does not count itself. The payload is the quantized
+        /// pose samples (see <see cref="CompressedPose"/>); it is kept verbatim here.
+        /// </summary>
+        MetaValue ReadCompressedPose(string t)
+        {
+            NoteClass(t);
+            MetaValue v = new MetaValue(t, MetaKind.Struct);
+            int n = (int)U32();
+            if (n < 0 || _p + (long)n > _limit)
+                throw new MetaParseException("Bad compressed pose data size " + n + " for " + t);
+            MetaValue size = new MetaValue("int32", MetaKind.Int);
+            size.Bits = (ulong)(uint)n;
+            v.Fields.Add(new MetaField("mDataSize", size));
+            MetaValue data = new MetaValue("#data", MetaKind.Raw);
+            data.Bytes = Take(n);
+            v.Fields.Add(new MetaField("#data", data));
+            return v;
+        }
+
         MetaValue ReadAnimation()
         {
             MetaValue v = ReadStruct("Animation");
@@ -903,6 +926,16 @@ namespace TFM.Core.Meta
                     WriteStruct(v, t);
                     WriteAnimationValues(v["#values"]);
                     return;
+                case "CompressedSkeletonPoseKeys":
+                case "CompressedSkeletonPoseKeys2":
+                    {
+                        NoteClass(t);
+                        MetaValue data = v["#data"];
+                        byte[] bytes = data != null && data.Bytes != null ? data.Bytes : new byte[0];
+                        _w.Write((uint)bytes.Length);
+                        _w.Write(bytes);
+                        return;
+                    }
             }
             WriteStruct(v, t);
         }
