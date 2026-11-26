@@ -9,10 +9,15 @@ Made in Unity 6000.6.8f1 to take full advantage of all of the official AI-integr
 Currently supports:
 
 Archives: dump names of ttarch archives as .txt or as a binary (supposedly all games).
+
 Bones: manipulating bones inside of the .skl directly without the need to use a 3D editor, changing their names coordinates (supposedly all games).
+
 Props: reading, editing and combining .prop file properties (TWDTTDS only).
+
 Chores: reading and editing (TWDTTDS only).
+
 Dialogues: conversation nodes, reading and editing (TWDTTDS only).
+
 
 It was entirely vide-coded using Claude Opus model.
 

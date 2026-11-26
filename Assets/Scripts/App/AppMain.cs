@@ -216,6 +216,7 @@ namespace TFM.App
             _modules.Add(new PropsModule());
             _modules.Add(new ChoresModule());
             _modules.Add(new DialoguesModule());
+            _modules.Add(new AnimationsModule());
 
             _ctx.OpenInModule = (title, path) =>
             {
